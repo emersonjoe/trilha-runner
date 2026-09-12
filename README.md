@@ -60,7 +60,7 @@ trilha-runner worker --cloud https://cloud.example --token $TOKEN --project my-a
 ```
 
 A worker is one process on one checkout. It asks the control plane for the next run
-(`GET /api/runs/next`), executes it locally exactly as above, and reports the result and the
+(`POST /api/runs/next`), executes it locally exactly as above, and reports the result and the
 evidence (`POST /api/runs/{id}/result`). The code never leaves the machine; the cloud sees
 status, branch, commit and evidence. `queue.Remote` is the whole contract, so another control
 plane can implement it.

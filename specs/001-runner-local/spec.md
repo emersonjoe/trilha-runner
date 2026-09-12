@@ -19,7 +19,7 @@ aconteceu — sem que o agente escreva na cópia de trabalho de quem mantém o p
 - `driver`: `exec` (agente de linha de comando, prompt no stdin), `ai` (loop `trilha/ai` com
   `read_file`, `list_files`, `write_file`, `run` restritos ao worktree e ao manifesto; ferramentas
   MCP do `trilha-spec` quando instalado), `echo` (determinístico).
-- `queue`: `Local` (grafo) e `Remote` (contrato HTTP do trilha-cloud: `GET /api/runs/next`,
+- `queue`: `Local` (grafo) e `Remote` (contrato HTTP do trilha-cloud: `POST /api/runs/next`,
   `POST /api/runs/{id}/result`, `POST /api/workers/heartbeat`).
 - `sandbox.Sandbox` com `None`; a costura para o cloud.
 - CLI `trilha-runner run | next | worker | worktree | drivers`.

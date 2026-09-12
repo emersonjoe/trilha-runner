@@ -32,11 +32,17 @@ func TestRemote(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		switch r.URL.Path {
 		case "/api/runs/next":
+			if r.Method != http.MethodPost {
+				http.Error(w, "claim is a POST", http.StatusMethodNotAllowed)
+				return
+			}
+			var claim struct{ Worker, Project string }
+			json.NewDecoder(r.Body).Decode(&claim)
 			if empty {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			json.NewEncoder(w).Encode(Item{ID: "run-1", Project: r.URL.Query().Get("project"), TaskID: "TASK-007"})
+			json.NewEncoder(w).Encode(Item{ID: "run-1", Project: claim.Project, TaskID: "TASK-007"})
 		case "/api/runs/run-1/result":
 			var res Result
 			json.NewDecoder(r.Body).Decode(&res)

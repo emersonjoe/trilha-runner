@@ -13,9 +13,9 @@ import (
 // Remote is a client of trilha-cloud's run queue. The contract is small on
 // purpose, so another control plane can implement it:
 //
-//	GET  /api/runs/next?worker=NAME&project=P   → 200 Item | 204 nothing
-//	POST /api/runs/{id}/result                  ← Result
-//	POST /api/workers/heartbeat                 ← {name, project, status}
+//	POST /api/runs/next            ← {worker, project}   → 200 Item | 204 nothing (a claim: it mutates)
+//	POST /api/runs/{id}/result     ← Result
+//	POST /api/workers/heartbeat    ← {name, project, status}
 //
 // with `Authorization: Bearer TOKEN` on every call.
 type Remote struct {
@@ -57,7 +57,7 @@ func (r Remote) do(ctx context.Context, method, path string, body any) (*http.Re
 
 // Next asks the control plane for work.
 func (r Remote) Next(ctx context.Context) (Item, error) {
-	resp, err := r.do(ctx, http.MethodGet, "/api/runs/next?worker="+r.Worker+"&project="+r.Project, nil)
+	resp, err := r.do(ctx, http.MethodPost, "/api/runs/next", map[string]string{"worker": r.Worker, "project": r.Project})
 	if err != nil {
 		return Item{}, err
 	}
