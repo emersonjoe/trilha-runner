@@ -1,0 +1,7 @@
+# Written by trilha-spec init. Protocol files are committed; runner state is not.
+runs/
+cache/
+app
+app.exe
+export-app
+export-app.exe

@@ -1,0 +1,10 @@
+{
+  "task": "TASK-005",
+  "seq": 4,
+  "kind": "note",
+  "at": "2026-09-12T23:19:32Z",
+  "by": "maintainer",
+  "exit_code": 0,
+  "passed": true,
+  "note": "Reviewed against spec 001; acceptance met."
+}

@@ -1,0 +1,13 @@
+{
+  "task": "TASK-002",
+  "seq": 1,
+  "kind": "check",
+  "at": "2026-09-12T23:19:30Z",
+  "by": "trilha-spec verify (session 001)",
+  "command": "go test ./driver/...",
+  "dir": ".",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/driver\t(cached)\n",
+  "output_sha256": "b1422d0efbb9f7a70aeab6607e3659bc0d9a737deb7e0b7df60d32af4b5e72d5",
+  "passed": true
+}

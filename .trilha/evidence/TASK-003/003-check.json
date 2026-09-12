@@ -1,0 +1,13 @@
+{
+  "task": "TASK-003",
+  "seq": 3,
+  "kind": "check",
+  "at": "2026-09-12T23:19:31Z",
+  "by": "trilha-spec verify (session 001)",
+  "command": "go test ./...",
+  "dir": ".",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/cmd/trilha-runner\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/driver\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/queue\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/runner\t(cached)\n?   \tgithub.com/emersonjoe/trilha-runner/sandbox\t[no test files]\n?   \tgithub.com/emersonjoe/trilha-runner/worktree\t[no test files]\n",
+  "output_sha256": "7df42980a3beaf1db6e5e94dde847f550984dedd509874d610f389ee3fa697de",
+  "passed": true
+}

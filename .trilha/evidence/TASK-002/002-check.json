@@ -1,0 +1,12 @@
+{
+  "task": "TASK-002",
+  "seq": 2,
+  "kind": "check",
+  "at": "2026-09-12T23:19:30Z",
+  "by": "trilha-spec verify (session 001)",
+  "command": "go vet ./...",
+  "dir": ".",
+  "exit_code": 0,
+  "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "passed": true
+}
