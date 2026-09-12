@@ -62,7 +62,9 @@ func TestRunEcho(t *testing.T) {
 	if out := sh(t, dir, bin, "worktree", "clean", "TASK-001"); !strings.Contains(out, "removed") {
 		t.Fatalf("clean:\n%s", out)
 	}
-	if out, err := exec.Command(bin, "run", "TASK-001").CombinedOutput(); err == nil || !strings.Contains(string(out), "no .trilha") {
+	outside := exec.Command(bin, "run", "TASK-001")
+	outside.Dir = t.TempDir()
+	if out, err := outside.CombinedOutput(); err == nil || !strings.Contains(string(out), "no .trilha") {
 		t.Fatalf("outside a project:\n%s", out)
 	}
 	if out := sh(t, dir, bin, "drivers"); !strings.Contains(out, "ai\necho\nexec") {
