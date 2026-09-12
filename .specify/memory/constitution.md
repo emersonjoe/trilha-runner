@@ -44,3 +44,9 @@ Spec em `specs/NNN-nome/` (spec-kit) e task em `.trilha/tasks/` do próprio repo
 runner roda as próprias tasks. Spec curta para mudança pequena.
 
 **Version**: 1.0.0 | **Ratified**: 2026-09-12 | **Last Amended**: 2026-09-12
+
+## Capítulo hands-on
+
+O site do Trilha ensina esta ferramenta em `/learn/agentic-runner` (pt: `/pt/aprender/agentico-runner`). Toda mudança no que o usuário
+digita ou vê atualiza o capítulo nas duas locales (`site/internal/docs/content/en/learn/agentic-runner.md` e `site/internal/docs/content/pt/aprender/agentico-runner.md` em `emersonjoe/trilha`) na
+mesma sessão, antes de a spec fechar.

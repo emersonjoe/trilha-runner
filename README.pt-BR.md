@@ -1,6 +1,8 @@
 # trilha-runner
 
 > [🇺🇸 English](README.md) · 🇧🇷 Português
+>
+> **Capítulo hands-on no site do Trilha:** <https://emersonjoe.github.io/trilha/pt/aprender/agentico-runner>
 
 **Executa tasks do [protocolo Trilha](https://github.com/emersonjoe/trilha-spec): uma task, um
 agente, um worktree, verificado, com evidência.**
