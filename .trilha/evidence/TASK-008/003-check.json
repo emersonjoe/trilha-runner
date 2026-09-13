@@ -1,0 +1,12 @@
+{
+  "task": "TASK-008",
+  "seq": 3,
+  "kind": "check",
+  "at": "2026-09-13T21:43:55Z",
+  "by": "trilha-spec verify",
+  "command": "go vet ./...",
+  "dir": "/private/tmp/trilha-runner-delivery",
+  "exit_code": 0,
+  "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "passed": true
+}

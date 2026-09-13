@@ -1,0 +1,30 @@
+[Unit]
+Description=Trilha Runner project worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trilha-runner
+Group=trilha-runner
+EnvironmentFile=/etc/trilha-runner/worker.env
+ExecStart=/usr/local/bin/trilha-runner worker --workspace-root /var/lib/trilha-runner/workspaces --delivery-config /etc/trilha-runner/delivery.json --push
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/trilha-runner
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -58,7 +58,9 @@ with the stage that failed, and the task goes to `failed`.
 ## Worker: the bridge to trilha-cloud
 
 ```bash
-trilha-runner worker --cloud https://cloud.example --token $TOKEN --project my-app
+trilha-runner worker --cloud https://cloud.example --token "$TOKEN" --project my-app \
+  --workspace-root /var/lib/trilha-runner/workspaces \
+  --repo git@github.com:acme/my-app.git --default-branch main --push
 ```
 
 A worker is one process on one checkout. It asks the control plane for the next run
@@ -66,6 +68,13 @@ A worker is one process on one checkout. It asks the control plane for the next 
 evidence (`POST /api/runs/{id}/result`). The code never leaves the machine; the cloud sees
 status, branch, commit and evidence. `queue.Remote` is the whole contract, so another control
 plane can implement it.
+
+For work created in the UI, the worker downloads a versioned bundle, materializes its
+specification and tasks under `.trilha/`, creates the implementation branch and publishes it.
+Passing `--delivery-config /etc/trilha-runner/delivery.json` enables deploy and rollback through
+local profiles with fixed argument arrays; Cloud never supplies commands. Secrets exist only as
+environment variables during that operation and are not written to logs. Hardened eoslab
+`systemd`, environment and profile examples live under `deploy/eoslab/`.
 
 ## Packages
 
