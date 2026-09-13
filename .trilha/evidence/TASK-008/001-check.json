@@ -1,0 +1,13 @@
+{
+  "task": "TASK-008",
+  "seq": 1,
+  "kind": "check",
+  "at": "2026-09-13T21:43:55Z",
+  "by": "trilha-spec verify",
+  "command": "go test ./...",
+  "dir": "/private/tmp/trilha-runner-delivery",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/cmd/trilha-runner\t2.594s\nok  \tgithub.com/emersonjoe/trilha-runner/deployer\t2.105s\nok  \tgithub.com/emersonjoe/trilha-runner/driver\t1.051s\nok  \tgithub.com/emersonjoe/trilha-runner/queue\t1.352s\nok  \tgithub.com/emersonjoe/trilha-runner/runner\t2.149s\n?   \tgithub.com/emersonjoe/trilha-runner/sandbox\t[no test files]\nok  \tgithub.com/emersonjoe/trilha-runner/syncer\t2.231s\n?   \tgithub.com/emersonjoe/trilha-runner/worktree\t[no test files]\n",
+  "output_sha256": "a202d1c095aadbbeb6575cf698ada030721154fa496f2c054d94f7329380619e",
+  "passed": true
+}

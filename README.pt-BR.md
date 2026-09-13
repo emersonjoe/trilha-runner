@@ -58,7 +58,9 @@ Uma partida que falha (sem comando, sem repositório git, agente saiu com erro) 
 ## Worker: a ponte para o trilha-cloud
 
 ```bash
-trilha-runner worker --cloud https://cloud.exemplo --token $TOKEN --project meu-app
+trilha-runner worker --cloud https://cloud.exemplo --token "$TOKEN" --project meu-app \
+  --workspace-root /var/lib/trilha-runner/workspaces \
+  --repo git@github.com:acme/meu-app.git --default-branch main --push
 ```
 
 Um worker é um processo num checkout. Pede ao control plane a próxima execução
@@ -66,6 +68,13 @@ Um worker é um processo num checkout. Pede ao control plane a próxima execuç�
 evidência (`POST /api/runs/{id}/result`). O código não sai da máquina; o cloud vê status,
 branch, commit e evidência. `queue.Remote` é o contrato inteiro, então outro control plane
 pode implementá-lo.
+
+Quando a execução nasce de uma spec criada na interface, o worker baixa um bundle versionado,
+sincroniza a spec e as tasks em `.trilha/`, cria o branch de implementação e o publica. Para
+deploy e rollback, `--delivery-config /etc/trilha-runner/delivery.json` habilita apenas perfis
+locais com argumentos fixos; o Cloud nunca envia comandos. Segredos são entregues como variáveis
+de ambiente apenas durante a operação e não entram nos logs. Exemplos de `systemd`, ambiente e
+perfis para eoslab estão em `deploy/eoslab/`.
 
 ## Pacotes
 

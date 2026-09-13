@@ -16,13 +16,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emersonjoe/trilha-runner/deployer"
 	"github.com/emersonjoe/trilha-runner/driver"
 	"github.com/emersonjoe/trilha-runner/queue"
 	"github.com/emersonjoe/trilha-runner/runner"
+	"github.com/emersonjoe/trilha-runner/syncer"
 	"github.com/emersonjoe/trilha-runner/worktree"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 const usage = `trilha-runner ` + version + ` — executes tasks of the Trilha protocol
 
@@ -31,7 +33,8 @@ usage: trilha-runner <command> [flags]
   run <task-id> [--driver exec|ai|echo] [--cmd "claude -p -"] [--json]
                          run one ready task in its own worktree, verify, record evidence
   next [flags of run]    run the first task that is ready with every dependency done
-  worker --cloud URL --token T --project P [--name N] [--once] [--every 10s]
+  worker --cloud URL --token T --project P [--workspace-root DIR] [--repo URL]
+         [--default-branch main] [--push] [--name N] [--once] [--every 10s]
                          take runs from trilha-cloud and report results
   worktree list | clean <task-id>
   drivers                the drivers available
@@ -103,7 +106,11 @@ func newRunner(drv, command string, out io.Writer) (*runner.Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := runner.New(cwd)
+	return newRunnerAt(cwd, drv, command, out)
+}
+
+func newRunnerAt(path, drv, command string, out io.Writer) (*runner.Runner, error) {
+	r, err := runner.New(path)
 	if err != nil {
 		return nil, err
 	}
@@ -180,12 +187,17 @@ func cmdWorker(ctx context.Context, args []string, out io.Writer) error {
 	fs := flags("worker")
 	cloud := fs.String("cloud", os.Getenv("TRILHA_CLOUD_URL"), "control plane URL")
 	token := fs.String("token", os.Getenv("TRILHA_CLOUD_TOKEN"), "bearer token")
-	project := fs.String("project", "", "project name on the control plane")
+	project := fs.String("project", os.Getenv("TRILHA_PROJECT"), "project name on the control plane")
 	name := fs.String("name", hostname(), "worker name")
 	once := fs.Bool("once", false, "run at most one item and exit")
 	every := fs.Duration("every", 10*time.Second, "poll interval when idle")
 	drv := fs.String("driver", "", "driver override")
 	command := fs.String("cmd", "", "command for the exec driver")
+	workspaceRoot := fs.String("workspace-root", os.Getenv("TRILHA_WORKSPACE_ROOT"), "root for isolated project checkouts")
+	repository := fs.String("repo", os.Getenv("TRILHA_REPOSITORY"), "trusted repository URL override")
+	defaultBranch := fs.String("default-branch", os.Getenv("TRILHA_DEFAULT_BRANCH"), "trusted default branch override")
+	push := fs.Bool("push", false, "publish synchronized spec and implementation branches")
+	deployConfig := fs.String("delivery-config", os.Getenv("TRILHA_DELIVERY_CONFIG"), "JSON file with local allow-listed deployment profiles")
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
@@ -198,6 +210,13 @@ func cmdWorker(ctx context.Context, args []string, out io.Writer) error {
 	}
 	r.By = "trilha-runner worker " + *name
 	q := queue.Remote{BaseURL: strings.TrimSuffix(*cloud, "/"), Token: *token, Worker: *name, Project: *project}
+	var delivery deployer.Config
+	if *deployConfig != "" {
+		delivery, err = deployer.Load(*deployConfig)
+		if err != nil {
+			return err
+		}
+	}
 	if err := q.Heartbeat(ctx, "idle"); err != nil {
 		return err
 	}
@@ -206,6 +225,25 @@ func cmdWorker(ctx context.Context, args []string, out io.Writer) error {
 		item, err := q.Next(ctx)
 		switch {
 		case errors.Is(err, queue.ErrEmpty):
+			if *deployConfig != "" {
+				work, deploymentErr := q.NextDeployment(ctx)
+				if deploymentErr == nil {
+					q.Heartbeat(ctx, "deploying "+work.Deployment.Environment)
+					result := delivery.Execute(ctx, work)
+					if err := q.DoneDeployment(ctx, work, queue.DeploymentResult{Passed: result.Passed, Log: result.Log, Health: result.Health, Error: result.Error}); err != nil {
+						return err
+					}
+					q.Heartbeat(ctx, "idle")
+					fmt.Fprintf(out, "%s → %s (%s)\n", work.Deployment.ID, map[bool]string{true: "succeeded", false: "failed"}[result.Passed], work.Deployment.Environment)
+					if *once {
+						return nil
+					}
+					continue
+				}
+				if !errors.Is(deploymentErr, queue.ErrEmpty) {
+					return deploymentErr
+				}
+			}
 			if *once {
 				fmt.Fprintln(out, "nothing to run")
 				return nil
@@ -220,7 +258,48 @@ func cmdWorker(ctx context.Context, args []string, out io.Writer) error {
 			return err
 		}
 		q.Heartbeat(ctx, "running "+item.TaskID)
-		res, runErr := r.Run(ctx, item.TaskID)
+		activeRunner := r
+		bundle, bundleErr := q.Bundle(ctx, item)
+		if bundleErr == nil {
+			if *workspaceRoot == "" {
+				return errors.New("worker needs --workspace-root for Cloud-managed work bundles")
+			}
+			bundleRepository := bundle.Repository
+			if *repository != "" {
+				if bundleRepository != "" && bundleRepository != *repository {
+					return errors.New("worker repository does not match the Cloud project")
+				}
+				bundleRepository = *repository
+			}
+			bundleBranch := bundle.DefaultBranch
+			if *defaultBranch != "" {
+				if bundleBranch != "" && bundleBranch != *defaultBranch {
+					return errors.New("worker default branch does not match the Cloud project")
+				}
+				bundleBranch = *defaultBranch
+			}
+			repositoryCheckout, err := syncer.EnsureRepository(ctx, *workspaceRoot, item.Project, bundleRepository, bundleBranch)
+			if err != nil {
+				bundleErr = err
+			} else if _, _, err := syncer.Materialize(ctx, repositoryCheckout, bundle, *push); err != nil {
+				bundleErr = err
+			} else {
+				activeRunner, bundleErr = newRunnerAt(repositoryCheckout.Path, *drv, *command, out)
+				if bundleErr == nil {
+					activeRunner.By = "trilha-runner worker " + *name
+				}
+			}
+		}
+		var res *runner.Result
+		var runErr error
+		if bundleErr != nil && !errors.Is(bundleErr, queue.ErrNoBundle) {
+			runErr = bundleErr
+		} else {
+			res, runErr = activeRunner.Run(ctx, item.TaskID)
+			if runErr == nil && res != nil && *push {
+				runErr = syncer.PushBranch(ctx, res.Worktree, res.Branch)
+			}
+		}
 		report := queue.Result{}
 		if res != nil {
 			report = queue.Result{Passed: res.Passed, Status: string(res.Status), Branch: res.Branch, Commit: res.Commit, Evidence: res.Evidence, Log: res.Output}

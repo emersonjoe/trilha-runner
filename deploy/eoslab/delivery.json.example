@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "production": {
+      "deploy": ["/usr/local/libexec/trilha/deploy-product"],
+      "rollback": ["/usr/local/libexec/trilha/rollback-product"],
+      "health_url": "https://app.example.com/health/ready",
+      "timeout_seconds": 600
+    }
+  }
+}

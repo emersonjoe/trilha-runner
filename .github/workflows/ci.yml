@@ -5,23 +5,38 @@ on:
   pull_request:
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.RUNNER_CI || 'ubuntu-latest' }}
     strategy:
       matrix:
         go: ["1.22", "1.25"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Configure ephemeral Go caches
+        run: |
+          echo "GOCACHE=$RUNNER_TEMP/go-build" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=$RUNNER_TEMP/go-mod" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          clean: true
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
-      - run: test -z "$(gofmt -l runner driver worktree queue sandbox cmd)"
+      - run: test -z "$(gofmt -l runner driver worktree queue sandbox deployer syncer cmd)"
       - run: go vet ./...
       - run: go test ./...
+      - name: Remove job caches
+        if: always() && runner.environment == 'self-hosted'
+        run: |
+          go clean -cache -modcache
+          rm -rf "$GOCACHE" "$GOMODCACHE"
   race:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.RUNNER_CI || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          clean: true
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.25"
       - run: go test -race ./...

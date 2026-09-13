@@ -1,0 +1,13 @@
+{
+  "task": "TASK-008",
+  "seq": 2,
+  "kind": "check",
+  "at": "2026-09-13T21:43:55Z",
+  "by": "trilha-spec verify",
+  "command": "make test",
+  "dir": "/private/tmp/trilha-runner-delivery",
+  "exit_code": 0,
+  "output": "test -z \"$(gofmt -l runner driver worktree queue sandbox cmd)\"\ngo vet ./...\ngo test ./...\nok  \tgithub.com/emersonjoe/trilha-runner/cmd/trilha-runner\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/deployer\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/driver\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/queue\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/runner\t(cached)\n?   \tgithub.com/emersonjoe/trilha-runner/sandbox\t[no test files]\nok  \tgithub.com/emersonjoe/trilha-runner/syncer\t(cached)\n?   \tgithub.com/emersonjoe/trilha-runner/worktree\t[no test files]\n",
+  "output_sha256": "1531412655797135c3b5c08371776d1b55efe6d0c958984a6ac1d4a9bbbb5c33",
+  "passed": true
+}
