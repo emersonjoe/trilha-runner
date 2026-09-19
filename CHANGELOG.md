@@ -37,6 +37,8 @@ This project follows semantic versioning.
 - A base URL outside a project's `allowed_hosts` is refused before the first request; the
   refusal is a `run` record with `stage: policy` and the task goes to `failed`.
 - A run whose requirements a worker does not meet is refused and reported, never executed.
+- The Docker sandbox reports a container that did not stay up, with its own output, instead of
+  waiting out the readiness timeout on something that is already gone.
 - The Docker sandbox never mounts the Docker socket, keeps the root filesystem read-only with
   the worktree as the only writable path that survives, and fixes cpu, memory, pid,
   `no-new-privileges` and `cap-drop` limits in the runner rather than the manifest.

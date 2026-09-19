@@ -143,6 +143,13 @@ var DefaultLimits = Limits{CPUs: "2", Memory: "4g", PIDs: 512}
 // WorkDir is where the worktree is mounted inside the containers.
 const WorkDir = "/workspace"
 
+// KeepAlive is what the agent's container runs so it stays up for the
+// commands the runner will send it. `sleep infinity` reads better but it is a
+// GNU coreutils spelling: busybox — Alpine, and most small base images —
+// refuses it and the container exits before the first command. So the seconds
+// are spelled out, the largest a 32-bit sleep accepts, about 68 years.
+var KeepAlive = []string{"sleep", "2147483647"}
+
 // Docker runs the agent and the checks in a container, with the services the
 // manifest declared on a network of their own.
 //
@@ -256,6 +263,9 @@ func (d Docker) Prepare(ctx context.Context, req Request) (Env, func() error, er
 			return Env{}, release, err
 		}
 		created.containers = append(created.containers, container)
+		if err := d.ensureUp(ctx, container, "service "+service.Name); err != nil {
+			return Env{}, release, err
+		}
 		d.logf("sandbox: service %s started", service.Name)
 		if err := d.wait(ctx, container, service); err != nil {
 			return Env{}, release, err
@@ -279,11 +289,16 @@ func (d Docker) Prepare(ctx context.Context, req Request) (Env, func() error, er
 		"--pids-limit", strconv.Itoa(d.limits().PIDs),
 		"--memory", d.limits().Memory, "--cpus", d.limits().CPUs,
 		"--env-file", envFile,
-		"--entrypoint", "sleep", req.Spec.Image, "infinity"}
+		"--entrypoint", KeepAlive[0]}
+	args = append(args, req.Spec.Image)
+	args = append(args, KeepAlive[1:]...)
 	if _, err := d.run(ctx, args...); err != nil {
 		return Env{}, release, err
 	}
 	created.containers = append(created.containers, name)
+	if err := d.ensureUp(ctx, name, "the sandbox of "+req.Task); err != nil {
+		return Env{}, release, err
+	}
 	d.logf("sandbox: %s running %s", name, req.Spec.Image)
 
 	return Env{
@@ -294,8 +309,10 @@ func (d Docker) Prepare(ctx context.Context, req Request) (Env, func() error, er
 }
 
 // wait polls a service's readiness command until it succeeds. A service with
-// no readiness command is taken at its word.
-func (d Docker) wait(ctx context.Context, container string, service Service) error {
+// no readiness command is taken at its word. A service that has exited is
+// reported at once, with its own output: waiting a minute for a container
+// that is already gone tells the operator nothing.
+func (d Docker) wait(parent context.Context, container string, service Service) error {
 	if len(service.Ready) == 0 {
 		return nil
 	}
@@ -303,7 +320,7 @@ func (d Docker) wait(ctx context.Context, container string, service Service) err
 	if timeout <= 0 {
 		timeout = time.Minute
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	var last error
 	for {
@@ -314,12 +331,43 @@ func (d Docker) wait(ctx context.Context, container string, service Service) err
 			return nil
 		}
 		last = err
+		// It is not coming up if it is no longer running.
+		if upErr := d.ensureUp(parent, container, "service "+service.Name); upErr != nil {
+			return upErr
+		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("sandbox: service %s was not ready in %s: %w", service.Name, timeout, last)
 		case <-time.After(readyInterval):
 		}
 	}
+}
+
+// up answers whether a container is still running.
+func (d Docker) up(ctx context.Context, container string) (bool, error) {
+	out, err := d.run(ctx, "inspect", "--format", "{{.State.Running}}", container)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "true", nil
+}
+
+// ensureUp fails with the container's own output when it did not stay up — an
+// image whose `sleep` refuses the argument, a service whose entrypoint exited
+// — instead of leaving the operator to infer it from a later `docker exec`.
+func (d Docker) ensureUp(ctx context.Context, container, what string) error {
+	running, err := d.up(ctx, container)
+	if err != nil {
+		return err
+	}
+	if running {
+		return nil
+	}
+	message := fmt.Sprintf("sandbox: %s exited instead of staying up (container %s)", what, container)
+	if logs, _ := d.run(ctx, "logs", "--tail", "20", container); logs != "" {
+		message += ": " + logs
+	}
+	return errors.New(message)
 }
 
 // readyInterval is how often a service is asked whether it is up.

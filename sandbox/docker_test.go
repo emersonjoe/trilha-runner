@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,8 +16,17 @@ import (
 )
 
 // fakeDocker writes a script that stands in for the client: it appends every
-// invocation to a log and exits 0, unless the command matches failOn.
+// invocation to a log and exits 0, unless the command matches failOn. An
+// `inspect` answers that the container is running, which is what the real
+// client says for a container that stayed up.
 func fakeDocker(t *testing.T, failOn string) (binary, logPath string) {
+	t.Helper()
+	return fakeDockerRunning(t, failOn, "true")
+}
+
+// fakeDockerRunning is fakeDocker with what `inspect` should answer, so a
+// container that did not stay up can be exercised too.
+func fakeDockerRunning(t *testing.T, failOn, running string) (binary, logPath string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("uses sh")
@@ -28,7 +38,10 @@ func fakeDocker(t *testing.T, failOn string) (binary, logPath string) {
 	if failOn != "" {
 		body += "case \"$*\" in\n  " + failOn + ") exit 1 ;;\nesac\n"
 	}
-	body += "echo fake-id\n"
+	body += "case \"$1\" in\n" +
+		"  inspect) echo " + running + "; exit 0 ;;\n" +
+		"  logs) echo 'sleep: invalid number'; exit 0 ;;\n" +
+		"esac\necho fake-id\n"
 	if err := os.WriteFile(binary, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -96,17 +109,26 @@ func TestDockerPreparesServicesThenTheAgentContainer(t *testing.T) {
 		}
 	}
 	// It is asked whether it is ready before the agent starts.
-	if lines[2] != "exec trilha-task-001-postgres pg_isready -U postgres" {
-		t.Fatalf("readiness call = %q", lines[2])
+	readyAt, agentAt := -1, -1
+	for i, line := range lines {
+		if line == "exec trilha-task-001-postgres pg_isready -U postgres" && readyAt < 0 {
+			readyAt = i
+		}
+		if strings.HasPrefix(line, "run --detach --name trilha-task-001 ") {
+			agentAt = i
+		}
 	}
-	agentCall := lines[3]
+	if readyAt < 0 || agentAt < 0 || readyAt > agentAt {
+		t.Fatalf("the agent must start after the service is ready:\n%s", strings.Join(lines, "\n"))
+	}
+	agentCall := lines[agentAt]
 	for _, want := range []string{
 		"--name trilha-task-001", "--network trilha-task-001",
 		"--volume " + worktree + ":/workspace", "--workdir /workspace",
 		"--read-only", "--tmpfs /tmp:rw,size=256m",
 		"--security-opt no-new-privileges", "--cap-drop ALL",
 		"--pids-limit 512", "--memory 4g", "--cpus 2",
-		"--entrypoint sleep golang:1.22 infinity",
+		"--entrypoint sleep golang:1.22 2147483647",
 	} {
 		if !strings.Contains(agentCall, want) {
 			t.Errorf("agent call misses %q:\n%s", want, agentCall)
@@ -321,4 +343,63 @@ func TestLimitsAreTheRunners(t *testing.T) {
 	if !called(t, logPath, "--cpus 1") || !called(t, logPath, "--memory 512m") || !called(t, logPath, "--pids-limit 64") {
 		t.Fatalf("calls:\n%s", strings.Join(calls(t, logPath), "\n"))
 	}
+}
+
+// The keep-alive must be a plain number of seconds. `sleep infinity` is a GNU
+// coreutils spelling and busybox — Alpine, and most small base images —
+// refuses it, so the container would exit before the first command.
+func TestKeepAliveIsPortable(t *testing.T) {
+	if len(KeepAlive) != 2 || KeepAlive[0] != "sleep" {
+		t.Fatalf("KeepAlive = %v", KeepAlive)
+	}
+	if _, err := strconv.Atoi(KeepAlive[1]); err != nil {
+		t.Fatalf("KeepAlive argument %q is not a number of seconds: busybox sleep needs one", KeepAlive[1])
+	}
+}
+
+// A container that did not stay up is reported at once, with its own output,
+// rather than through a later `docker exec` that says nothing useful.
+func TestDockerReportsAContainerThatDidNotStayUp(t *testing.T) {
+	binary, logPath := fakeDockerRunning(t, "", "false")
+	_, release, err := Docker{Binary: binary}.Prepare(context.Background(), Request{
+		Task: "TASK-004", Dir: t.TempDir(), Spec: &Spec{Image: "alpine:3"},
+	})
+	if err == nil {
+		t.Fatal("a container that exited was accepted")
+	}
+	if !strings.Contains(err.Error(), "exited instead of staying up") {
+		t.Fatalf("err = %v", err)
+	}
+	// The container's own output is what says why.
+	if !strings.Contains(err.Error(), "sleep: invalid number") {
+		t.Fatalf("err does not carry the container's output: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	if !called(t, logPath, "rm --force --volumes trilha-task-004") {
+		t.Fatalf("teardown incomplete:\n%s", strings.Join(calls(t, logPath), "\n"))
+	}
+}
+
+// A service that exits fails immediately instead of after the readiness
+// timeout: waiting a minute for a container that is already gone tells the
+// operator nothing.
+func TestDockerFailsFastWhenAServiceExits(t *testing.T) {
+	readyInterval = time.Hour // any poll-then-retry would hang the test
+	defer func() { readyInterval = time.Second }()
+	binary, _ := fakeDockerRunning(t, "exec*pg_isready*", "false")
+	spec := demoSpec()
+	spec.Services[0].ReadyTimeoutSeconds = 3600
+	start := time.Now()
+	_, release, err := Docker{Binary: binary}.Prepare(context.Background(), Request{
+		Task: "TASK-005", Dir: t.TempDir(), Spec: spec,
+	})
+	if err == nil || !strings.Contains(err.Error(), "exited instead of staying up") {
+		t.Fatalf("err = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 30*time.Second {
+		t.Fatalf("took %s: it waited for a container that was already gone", elapsed)
+	}
+	release()
 }

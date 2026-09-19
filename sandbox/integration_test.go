@@ -124,17 +124,27 @@ func TestCheckNeedingPostgresPassesInsideAndFailsWithNone(t *testing.T) {
 // Teardown leaves no container and no network behind, whatever the run did.
 func TestTeardownLeavesNothingBehind(t *testing.T) {
 	box := requireDocker(t)
-	names := func(kind string) string {
-		out, err := exec.Command("docker", kind, "ls", "--format", "{{.Name}}").Output()
+	// --all, so a container that was merely stopped rather than removed is
+	// caught as a leftover too.
+	names := func(kind string, extra ...string) string {
+		args := append(append([]string{kind, "ls"}, extra...), "--format", "{{.Name}}")
+		out, err := exec.Command("docker", args...).Output()
 		if err != nil {
 			t.Fatal(err)
 		}
 		return string(out)
 	}
+	// A service has to be an image that stays up on its own; a base image with
+	// no long-running entrypoint exits at once, which the sandbox now reports
+	// rather than waiting out.
 	sb := &sandbox.Spec{
-		Image: "alpine:3",
+		Image: "postgres:16-alpine",
 		Services: []sandbox.Service{{
-			Name: "cache", Image: "alpine:3", Ready: []string{"true"},
+			Name:                "postgres",
+			Image:               "postgres:16-alpine",
+			Env:                 map[string]string{"POSTGRES_PASSWORD": "trilha"},
+			Ready:               []string{"pg_isready", "-U", "postgres"},
+			ReadyTimeoutSeconds: 120,
 		}},
 	}
 	env, release, err := box.Prepare(context.Background(), sandbox.Request{
@@ -152,7 +162,7 @@ func TestTeardownLeavesNothingBehind(t *testing.T) {
 	if err := release(); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(names("container"), "trilha-task-009") {
+	if strings.Contains(names("container", "--all"), "trilha-task-009") {
 		t.Fatal("a container outlived the run")
 	}
 	if strings.Contains(names("network"), "trilha-task-009") {
@@ -161,6 +171,10 @@ func TestTeardownLeavesNothingBehind(t *testing.T) {
 }
 
 // The worktree is the only writable path that survives the run.
+//
+// The image is deliberately busybox-based: it is the case `sleep infinity`
+// broke, so this is the regression guard for KeepAlive as much as for the
+// mount.
 func TestOnlyTheWorktreeIsWritable(t *testing.T) {
 	box := requireDocker(t)
 	dir := t.TempDir()
