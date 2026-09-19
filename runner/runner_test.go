@@ -125,3 +125,15 @@ func TestExecDriverFailureIsRecorded(t *testing.T) {
 		t.Fatalf("evidence = %+v", ev)
 	}
 }
+
+// commit stages everything in dir so a worktree created from HEAD carries it.
+func commit(t *testing.T, dir string) {
+	t.Helper()
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "fixtures"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+}

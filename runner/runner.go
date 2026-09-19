@@ -171,23 +171,38 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	if err != nil {
 		return fail("verify", err)
 	}
-	res.Passed = v.Passed
 	res.Evidence = v.Evidence
+	evals, err := r.recordEvals(v, id, env.Dir)
+	if err != nil {
+		return fail("verify", err)
+	}
+	res.Evidence = append(res.Evidence, evals...)
+	// A metric that misses its threshold fails the verification even when
+	// every command exited 0.
+	res.Passed = v.Passed
+	for _, e := range evals {
+		if !e.Passed {
+			res.Passed = false
+		}
+	}
 	meta := map[string]string{"driver": drv.Name(), "branch": wt.Branch, "commit": sha, "elapsed": time.Since(start).Round(time.Millisecond).String()}
+	if s := summarize(evals); s != "" {
+		meta["metrics"] = s
+	}
 	for k, val := range out.Meta {
 		meta[k] = val
 	}
 	if stat, err := wm.DiffStat(ctx, wt); err == nil && stat != "" {
 		meta["diffstat"] = stat
 	}
-	run, _, err := task.Record(r.Layout, task.Evidence{Task: id, Kind: "run", By: r.By, Passed: v.Passed, Note: strings.TrimSpace(firstLines(out.Text, 20)), Files: []string{logPath}, Meta: meta})
+	run, _, err := task.Record(r.Layout, task.Evidence{Task: id, Kind: "run", By: r.By, Passed: res.Passed, Note: strings.TrimSpace(firstLines(out.Text, 20)), Files: []string{logPath}, Meta: meta})
 	if err != nil {
 		return fail("evidence", err)
 	}
 	res.Evidence = append(res.Evidence, run)
 
 	to := task.Failed
-	if v.Passed {
+	if res.Passed {
 		to = task.Review
 	}
 	if _, err := r.Store.Move(id, to); err != nil {
@@ -195,8 +210,8 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	}
 	res.Status = to
 	res.Elapsed = time.Since(start)
-	r.logf("%s is now %s (%d checks, passed=%v)", id, to, len(v.Evidence), v.Passed)
-	if !v.Passed {
+	r.logf("%s is now %s (%d checks, %d metrics, passed=%v)", id, to, len(v.Evidence), len(evals), res.Passed)
+	if !res.Passed {
 		return res, errors.New("verification failed")
 	}
 	return res, nil
