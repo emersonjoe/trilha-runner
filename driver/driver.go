@@ -10,6 +10,7 @@ package driver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -33,7 +34,33 @@ type Job struct {
 	Command string
 	// Env is added to the agent's environment.
 	Env []string
+	// Attempt is the one-based execution attempt.
+	Attempt int
+	// Checkpoint is the persisted result of a previous interrupted attempt.
+	Checkpoint string
+	// AllowedChecks is the exact command allow-list exposed to the AI.
+	AllowedChecks []string
+	// AI is a project-scoped provider configuration supplied with remote work.
+	// It overrides process-global provider variables for this job only.
+	AI *AIConfig
+	// Prefix runs an exec driver or verification command inside a prepared
+	// sandbox, for example: docker exec -i -w /workspace CONTAINER.
+	Prefix []string
 }
+
+// AIConfig is deliberately transient. The runner must not persist Credential.
+type AIConfig struct {
+	Provider     string
+	BaseURL      string
+	Model        string
+	Credential   string
+	AllowedHosts []string
+}
+
+// PolicyError means execution was refused before contacting the provider.
+type PolicyError struct{ Reason string }
+
+func (e *PolicyError) Error() string { return "policy: " + e.Reason }
 
 // Output is what an execution answered.
 type Output struct {
@@ -42,6 +69,8 @@ type Output struct {
 	// Meta is what the driver knows and the evidence should keep: model,
 	// turns, tokens, exit code.
 	Meta map[string]string
+	// Recovery is a driver-owned checkpoint containing conversation and tool state.
+	Recovery json.RawMessage
 }
 
 // Driver runs a job.
@@ -54,9 +83,19 @@ type Driver interface {
 var ErrUnknown = errors.New("driver: unknown driver")
 
 var registry = map[string]func() Driver{
-	"exec": func() Driver { return Exec{} },
-	"ai":   func() Driver { return AI{} },
-	"echo": func() Driver { return Echo{} },
+	"exec":        func() Driver { return Exec{} },
+	"ai":          func() Driver { return AI{} },
+	"claude-code": func() Driver { return ClaudeCode{} },
+	"echo":        func() Driver { return Echo{} },
+}
+
+func redactSecrets(value string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+	}
+	return value
 }
 
 // New answers a driver by name.

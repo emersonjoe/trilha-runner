@@ -125,3 +125,23 @@ func TestExecDriverFailureIsRecorded(t *testing.T) {
 		t.Fatalf("evidence = %+v", ev)
 	}
 }
+
+func TestPolicyFailureIsRecordedWithoutRetry(t *testing.T) {
+	dir := repo(t)
+	runner, _ := New(dir)
+	runner.Driver = driver.AI{}
+	runner.AI = &driver.AIConfig{BaseURL: "https://outside.example/v1", Credential: "secret", AllowedHosts: []string{"gateway.example.br"}}
+	item, _ := runner.Store.Create("Residency", func(current *task.Task) {
+		current.Status = task.Ready
+		current.Acceptance = []string{"provider allowed"}
+		current.Checks = []string{"true"}
+	})
+	result, err := runner.Run(context.Background(), item.ID)
+	if err == nil || result.Status != task.Failed || result.Attempt != 1 || result.FailureClass != "policy" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	evidence, _ := task.ListEvidence(runner.Layout, item.ID)
+	if len(evidence) != 1 || evidence[0].Meta["stage"] != "policy" || strings.Contains(evidence[0].Note, "secret") {
+		t.Fatalf("evidence=%+v", evidence)
+	}
+}

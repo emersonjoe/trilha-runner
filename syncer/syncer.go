@@ -93,7 +93,7 @@ func Materialize(ctx context.Context, repository Repository, bundle queue.Bundle
 	if !spec.ValidSpecID(specID) {
 		specID = fmt.Sprintf("%03d-%s", max(1, bundle.Specification.Version), slug(bundle.Specification.Title))
 	}
-	document := spec.NewSpecDoc(specID, bundle.Specification.Title)
+	document := spec.NewSpecDoc(specID, bundle.Specification.Title, "", "")
 	document.Status = "approved"
 	document.Fields.Set("cloud_id", bundle.Specification.ID)
 	document.Fields.Set("cloud_round", bundle.Round.ID)

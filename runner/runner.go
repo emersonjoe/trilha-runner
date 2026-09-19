@@ -13,16 +13,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/emersonjoe/trilha-runner/driver"
+	"github.com/emersonjoe/trilha-runner/internal/taskcompat"
+	"github.com/emersonjoe/trilha-runner/queue"
 	"github.com/emersonjoe/trilha-runner/sandbox"
 	"github.com/emersonjoe/trilha-runner/worktree"
 	"github.com/emersonjoe/trilha-spec/agent"
-	"github.com/emersonjoe/trilha-spec/ai"
 	"github.com/emersonjoe/trilha-spec/spec"
 	"github.com/emersonjoe/trilha-spec/task"
 )
@@ -35,25 +33,58 @@ type Runner struct {
 	Driver driver.Driver
 	// Command overrides the manifest's command (exec driver).
 	Command string
-	Sandbox sandbox.Sandbox
+	// AI is a transient, project-scoped provider policy supplied by the queue.
+	AI *driver.AIConfig
+	// Repositories maps cross-repository dependency aliases to sibling checkouts.
+	Repositories map[string]string
+	Sandbox      sandbox.Sandbox
 	// By is recorded as the author of the evidence.
 	By string
 	// Log receives progress lines; nil discards them.
 	Log func(string)
+	// MaxAttempts includes the first attempt. Default: 3.
+	MaxAttempts int
+	// RetryBase is the first exponential-backoff delay. Default: 1 second.
+	RetryBase time.Duration
+}
+
+// Attempt is one provider or corrective execution inside a logical run.
+type Attempt struct {
+	Number        int       `json:"number"`
+	Status        string    `json:"status"`
+	FailureClass  string    `json:"failure_class,omitempty"`
+	RepairReason  string    `json:"repair_reason,omitempty"`
+	Model         string    `json:"model,omitempty"`
+	TotalTokens   int       `json:"total_tokens,omitempty"`
+	EstimatedCost float64   `json:"estimated_cost,omitempty"`
+	Started       time.Time `json:"started"`
+	Finished      time.Time `json:"finished"`
 }
 
 // Result is what a run leaves behind.
 type Result struct {
-	Task     string          `json:"task"`
-	Status   task.Status     `json:"status"`
-	Passed   bool            `json:"passed"`
-	Branch   string          `json:"branch"`
-	Worktree string          `json:"worktree"`
-	Commit   string          `json:"commit,omitempty"`
-	Driver   string          `json:"driver"`
-	Output   string          `json:"output,omitempty"`
-	Evidence []task.Evidence `json:"evidence"`
-	Elapsed  time.Duration   `json:"elapsed"`
+	ProtocolVersion string          `json:"protocol_version"`
+	Task            string          `json:"task"`
+	Status          task.Status     `json:"status"`
+	Passed          bool            `json:"passed"`
+	Branch          string          `json:"branch"`
+	Worktree        string          `json:"worktree"`
+	Commit          string          `json:"commit,omitempty"`
+	Driver          string          `json:"driver"`
+	Output          string          `json:"output,omitempty"`
+	Evidence        []task.Evidence `json:"evidence"`
+	Elapsed         time.Duration   `json:"elapsed"`
+	Attempt         int             `json:"attempt,omitempty"`
+	Attempts        []Attempt       `json:"attempts,omitempty"`
+	Model           string          `json:"model,omitempty"`
+	InputTokens     int             `json:"input_tokens,omitempty"`
+	OutputTokens    int             `json:"output_tokens,omitempty"`
+	TotalTokens     int             `json:"total_tokens,omitempty"`
+	EstimatedCost   float64         `json:"estimated_cost,omitempty"`
+	FailureClass    string          `json:"failure_class,omitempty"`
+	FilesChanged    []string        `json:"files_changed,omitempty"`
+	DiffSummary     string          `json:"diff_summary,omitempty"`
+	AgentReport     string          `json:"agent_report,omitempty"`
 }
 
 // New opens the layout above dir.
@@ -77,7 +108,7 @@ func (r *Runner) logf(format string, args ...any) {
 // the task where it was.
 func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	start := time.Now()
-	t, err := r.Store.Get(id)
+	t, err := taskcompat.Get(r.Store, id)
 	if err != nil {
 		return nil, err
 	}
@@ -108,18 +139,18 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	if err := wm.IsRepo(ctx); err != nil {
 		return nil, err
 	}
-	pack, err := ai.Build(r.Layout, id)
+	pack, err := buildContextPack(r.Layout, t, proj, man)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := r.Store.Move(id, task.Running); err != nil {
+	if err := r.moveRunning(t); err != nil {
 		return nil, err
 	}
-	res := &Result{Task: id, Driver: drv.Name()}
+	res := &Result{ProtocolVersion: "trilha.execution/v1", Task: id, Driver: drv.Name()}
 	fail := func(stage string, cause error) (*Result, error) {
 		r.logf("%s: %v", stage, cause)
 		task.Record(r.Layout, task.Evidence{Task: id, Kind: "run", By: r.By, Note: stage + ": " + cause.Error(), Meta: map[string]string{"driver": drv.Name(), "stage": stage}})
-		if _, err := r.Store.Move(id, task.Failed); err == nil {
+		if err := taskcompat.Move(r.Store, t, task.Failed); err == nil {
 			res.Status = task.Failed
 		}
 		res.Elapsed = time.Since(start)
@@ -137,82 +168,58 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	if sb == nil {
 		sb = sandbox.None{}
 	}
+	if _, isNone := sb.(sandbox.None); isNone {
+		if configured, ok, configErr := sandbox.FromAgent(man); configErr != nil {
+			return fail("sandbox", configErr)
+		} else if ok {
+			sb = configured
+		}
+	}
 	env, release, err := sb.Prepare(ctx, wt.Path)
 	if err != nil {
 		return fail("sandbox", err)
 	}
 	defer release()
 
-	r.logf("driver %s starting", drv.Name())
-	out, execErr := drv.Execute(ctx, driver.Job{Task: t, Agent: man, Prompt: pack.Markdown(), Dir: env.Dir, Command: r.Command, Env: env.Env})
-	res.Output = out.Text
-	logPath := filepath.Join(r.Layout.Runs(), id, "agent.log")
-	os.MkdirAll(filepath.Dir(logPath), 0o755)
-	os.WriteFile(logPath, []byte(out.Text), 0o644)
-	if execErr != nil {
-		return fail("execution", execErr)
+	maxAttempts := r.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = fieldInt(t.Fields.Get("max_attempts"), 0)
 	}
+	if maxAttempts <= 0 && man != nil {
+		maxAttempts = fieldInt(man.Fields.Get("max_attempts"), 0)
+	}
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
+	loop := attemptLoop{
+		runner: r, ctx: ctx, item: t, manifest: man, driver: drv, manager: wm, tree: wt,
+		dir: env.Dir, env: env.Env, prefix: env.Prefix, prompt: pack.Markdown(), checks: append(append([]string(nil), t.Checks...), proj.Verify...), ai: r.AI,
+		maxAttempts: maxAttempts, result: res, started: start, fail: fail,
+	}
+	return loop.run()
+}
 
-	sha, err := wm.Commit(ctx, wt, fmt.Sprintf("%s: %s", id, t.Title))
+func (r *Runner) moveRunning(item *task.Task) error {
+	blocked, err := (queue.Local{Store: r.Store, Repositories: r.Repositories}).Blocker(item)
 	if err != nil {
-		return fail("commit", err)
+		return err
 	}
-	res.Commit = sha
-	if sha != "" {
-		r.logf("committed %s", sha[:12])
-	} else {
-		r.logf("nothing to commit")
+	if blocked != "" {
+		return (&queue.BlockedError{Task: item.ID, Reason: blocked})
 	}
-
-	if _, err := r.Store.Move(id, task.Verify); err != nil {
-		return fail("verify", err)
-	}
-	v, err := task.RunChecks(ctx, r.Layout, t, env.Dir, r.By)
-	if err != nil {
-		return fail("verify", err)
-	}
-	res.Passed = v.Passed
-	res.Evidence = v.Evidence
-	meta := map[string]string{"driver": drv.Name(), "branch": wt.Branch, "commit": sha, "elapsed": time.Since(start).Round(time.Millisecond).String()}
-	for k, val := range out.Meta {
-		meta[k] = val
-	}
-	if stat, err := wm.DiffStat(ctx, wt); err == nil && stat != "" {
-		meta["diffstat"] = stat
-	}
-	run, _, err := task.Record(r.Layout, task.Evidence{Task: id, Kind: "run", By: r.By, Passed: v.Passed, Note: strings.TrimSpace(firstLines(out.Text, 20)), Files: []string{logPath}, Meta: meta})
-	if err != nil {
-		return fail("evidence", err)
-	}
-	res.Evidence = append(res.Evidence, run)
-
-	to := task.Failed
-	if v.Passed {
-		to = task.Review
-	}
-	if _, err := r.Store.Move(id, to); err != nil {
-		return fail("status", err)
-	}
-	res.Status = to
-	res.Elapsed = time.Since(start)
-	r.logf("%s is now %s (%d checks, passed=%v)", id, to, len(v.Evidence), v.Passed)
-	if !v.Passed {
-		return res, errors.New("verification failed")
-	}
-	return res, nil
+	return taskcompat.Move(r.Store, item, task.Running)
 }
 
 // Next runs the first executable task, or answers ErrNothing.
 func (r *Runner) Next(ctx context.Context) (*Result, error) {
-	g, err := r.Store.Graph()
+	item, err := (queue.Local{Store: r.Store, Repositories: r.Repositories}).Next(ctx)
+	if errors.Is(err, queue.ErrEmpty) {
+		return nil, ErrNothing
+	}
 	if err != nil {
 		return nil, err
 	}
-	t := g.Next()
-	if t == nil {
-		return nil, ErrNothing
-	}
-	return r.Run(ctx, t.ID)
+	return r.Run(ctx, item.TaskID)
 }
 
 // ErrNothing is a graph with no executable task.
@@ -223,12 +230,4 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
-}
-
-func firstLines(s string, n int) string {
-	lines := strings.Split(s, "\n")
-	if len(lines) > n {
-		lines = lines[:n]
-	}
-	return strings.Join(lines, "\n")
 }

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -27,6 +29,7 @@ type Remote struct {
 	Token   string
 	Worker  string
 	Project string
+	Capabilities
 	// HTTPClient defaults to one with a 30-second timeout.
 	HTTPClient *http.Client
 }
@@ -61,7 +64,12 @@ func (r Remote) do(ctx context.Context, method, path string, body any) (*http.Re
 
 // Next asks the control plane for work.
 func (r Remote) Next(ctx context.Context) (Item, error) {
-	resp, err := r.do(ctx, http.MethodPost, "/api/runs/next", map[string]string{"worker": r.Worker, "project": r.Project})
+	payload := struct {
+		Worker  string `json:"worker"`
+		Project string `json:"project"`
+		Capabilities
+	}{Worker: r.Worker, Project: r.Project, Capabilities: r.normalizedCapabilities()}
+	resp, err := r.do(ctx, http.MethodPost, "/api/runs/next", payload)
 	if err != nil {
 		return Item{}, err
 	}
@@ -74,10 +82,45 @@ func (r Remote) Next(ctx context.Context) (Item, error) {
 		if err := json.NewDecoder(resp.Body).Decode(&it); err != nil {
 			return Item{}, err
 		}
+		for _, dependency := range it.DependsOn {
+			alias, id, remote := strings.Cut(dependency, ":")
+			if !remote {
+				continue
+			}
+			status, err := r.DependencyStatus(ctx, alias, id)
+			if err != nil || status != "done" {
+				it.Waiting = "waiting:" + dependency
+				break
+			}
+		}
 		return it, nil
 	}
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return Item{}, fmt.Errorf("queue: %s: %s", resp.Status, bytes.TrimSpace(b))
+}
+
+// DependencyStatus asks the control plane for one task in another project.
+func (r Remote) DependencyStatus(ctx context.Context, project, id string) (string, error) {
+	path := "/api/projects/" + url.PathEscape(project) + "/tasks/" + url.PathEscape(id) + "?requesting_project=" + url.QueryEscape(r.Project)
+	resp, err := r.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("queue: dependency: %s: %s", resp.Status, bytes.TrimSpace(body))
+	}
+	var result struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if result.Status == "" {
+		return "", errors.New("queue: dependency status is empty")
+	}
+	return result.Status, nil
 }
 
 // Done reports the result of an item.
@@ -120,7 +163,13 @@ func (r Remote) Bundle(ctx context.Context, item Item) (Bundle, error) {
 
 // Heartbeat tells the control plane this worker is alive and what it is doing.
 func (r Remote) Heartbeat(ctx context.Context, status string) error {
-	resp, err := r.do(ctx, http.MethodPost, "/api/workers/heartbeat", map[string]string{"name": r.Worker, "project": r.Project, "status": status})
+	payload := struct {
+		Name    string `json:"name"`
+		Project string `json:"project"`
+		Status  string `json:"status"`
+		Capabilities
+	}{Name: r.Worker, Project: r.Project, Status: status, Capabilities: r.normalizedCapabilities()}
+	resp, err := r.do(ctx, http.MethodPost, "/api/workers/heartbeat", payload)
 	if err != nil {
 		return err
 	}
@@ -129,6 +178,17 @@ func (r Remote) Heartbeat(ctx context.Context, status string) error {
 		return fmt.Errorf("queue: heartbeat: %s", resp.Status)
 	}
 	return nil
+}
+
+func (r Remote) normalizedCapabilities() Capabilities {
+	capabilities := r.Capabilities
+	if capabilities.Capacity <= 0 {
+		capabilities.Capacity = 1
+	}
+	if capabilities.Running < 0 {
+		capabilities.Running = 0
+	}
+	return capabilities
 }
 
 // NextDeployment claims the oldest queued deployment for this runner's project.

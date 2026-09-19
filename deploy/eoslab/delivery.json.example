@@ -5,6 +5,23 @@
       "rollback": ["/usr/local/libexec/trilha/rollback-product"],
       "health_url": "https://app.example.com/health/ready",
       "timeout_seconds": 600
+    },
+    "compose": {
+      "steps": [
+        {"name": "pull", "argv": ["docker", "compose", "-f", "compose.homelab.yml", "pull"], "on_fail": "abort"},
+        {"name": "switch", "argv": ["docker", "compose", "-f", "compose.homelab.yml", "up", "-d", "--wait"], "on_fail": "abort"}
+      ],
+      "migrate": {
+        "argv": ["docker", "compose", "-f", "compose.homelab.yml", "run", "--rm", "api", "alembic", "upgrade", "head"],
+        "downgrade": ["docker", "compose", "-f", "compose.homelab.yml", "run", "--rm", "api", "alembic", "downgrade", "-1"],
+        "reversible": false
+      },
+      "rollback": ["/usr/local/libexec/trilha/rollback-compose-image"],
+      "health": [
+        {"name": "api", "url": "https://app.example.com/health/ready", "timeout_seconds": 60},
+        {"name": "web", "url": "https://app.example.com/", "timeout_seconds": 60}
+      ],
+      "timeout_seconds": 900
     }
   }
 }

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trilha.dev/contracts/execution/v1/schema.json",
+  "title": "Trilha execution v1",
+  "type": "object",
+  "required": ["protocol_version", "id", "project", "task_id", "status", "created"],
+  "properties": {
+    "protocol_version": { "const": "trilha.execution/v1" },
+    "id": { "type": "string", "pattern": "^run-[0-9]{6,}$" },
+    "project": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string", "pattern": "^TASK-[0-9]{3,}$" },
+    "status": { "enum": ["queued", "running", "review", "failed", "done", "cancelled"] },
+    "phase": { "enum": ["queued", "preparing_context", "creating_worktree", "consulting_ai", "changing_files", "running_checks", "creating_preview", "awaiting_review", "retry_wait", "cancelling", "cancelled", "failed", "done"] },
+    "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "attempt": { "type": "integer", "minimum": 0 },
+    "max_attempts": { "type": "integer", "minimum": 1 },
+    "retry_of": { "type": "string", "pattern": "^run-[0-9]{6,}$" },
+    "repair_reason": { "type": "string" },
+    "cancel_requested": { "type": "boolean" },
+    "worker": { "type": "string" },
+    "created": { "type": "string", "format": "date-time" },
+    "started": { "type": "string", "format": "date-time" },
+    "finished": { "type": "string", "format": "date-time" },
+    "events": { "type": "array", "items": { "$ref": "#/$defs/event" } },
+    "attempts": { "type": "array", "items": { "$ref": "#/$defs/attempt" } },
+    "result": { "$ref": "#/$defs/outcome" }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "event": {
+      "type": "object",
+      "required": ["sequence", "at", "phase", "message"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1 },
+        "at": { "type": "string", "format": "date-time" },
+        "phase": { "$ref": "#/properties/phase" },
+        "message": { "type": "string" },
+        "attempt": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": true
+    },
+    "attempt": {
+      "type": "object",
+      "required": ["number", "status", "started"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["running", "failed", "recovered", "passed", "cancelled"] },
+        "failure_class": { "type": "string" },
+        "error_code": { "type": "string" },
+        "message": { "type": "string" },
+        "repair_reason": { "type": "string" },
+        "model": { "type": "string" },
+        "total_tokens": { "type": "integer", "minimum": 0 },
+        "estimated_cost": { "type": "number", "minimum": 0 },
+        "started": { "type": "string", "format": "date-time" },
+        "finished": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    },
+    "outcome": {
+      "type": "object",
+      "required": ["passed", "status"],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "status": { "$ref": "#/properties/status" },
+        "attempt": { "type": "integer", "minimum": 0 },
+        "retry_of": { "$ref": "#/properties/retry_of" },
+        "total_tokens": { "type": "integer", "minimum": 0 },
+        "estimated_cost": { "type": "number", "minimum": 0 },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "files_changed": { "type": "array", "items": { "type": "string" } },
+        "evidence": { "type": "array", "items": { "type": "object" } }
+      },
+      "additionalProperties": true
+    }
+  }
+}
