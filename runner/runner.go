@@ -42,10 +42,28 @@ type Runner struct {
 	By string
 	// Log receives progress lines; nil discards them.
 	Log func(string)
+	// Progress receives structured phase changes; nil discards them.
+	Progress func(Event)
 	// MaxAttempts includes the first attempt. Default: 3.
 	MaxAttempts int
 	// RetryBase is the first exponential-backoff delay. Default: 1 second.
 	RetryBase time.Duration
+}
+
+// Event is a structured progress notification about a run's phase, emitted
+// alongside (never parsed from) Log lines so a caller — a worker reporting
+// to trilha-cloud — can follow a run without scraping text.
+type Event struct {
+	Phase       string
+	Message     string
+	Attempt     int
+	MaxAttempts int
+	Branch      string
+	Model       string
+	// AttemptStatus, when set, closes out an attempt ("passed" or "failed").
+	AttemptStatus string
+	FailureClass  string
+	ErrorCode     string
 }
 
 // Attempt is one provider or corrective execution inside a logical run.
@@ -99,6 +117,12 @@ func New(dir string) (*Runner, error) {
 func (r *Runner) logf(format string, args ...any) {
 	if r.Log != nil {
 		r.Log(fmt.Sprintf(format, args...))
+	}
+}
+
+func (r *Runner) progress(e Event) {
+	if r.Progress != nil {
+		r.Progress(e)
 	}
 }
 
@@ -163,6 +187,7 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	}
 	res.Branch, res.Worktree = wt.Branch, wt.Path
 	r.logf("worktree %s on %s", wt.Path, wt.Branch)
+	r.progress(Event{Phase: "creating_worktree", Branch: wt.Branch})
 
 	sb := r.Sandbox
 	if sb == nil {

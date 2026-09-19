@@ -2,6 +2,24 @@
 
 This project follows semantic versioning.
 
+## 0.4.0 — 2026-09-19
+
+### Added
+
+- `runner.Runner` gained a `Progress func(Event)` hook, emitted alongside (never parsed from)
+  the existing `Log` lines at the points a run changes phase: worktree creation, each attempt
+  starting, verification, a retrying attempt and entering review. `queue.Remote.Progress`
+  posts this best-effort to `POST /api/runs/{id}/progress` on trilha-cloud with its own 5-second
+  timeout; the worker ignores its error so a Cloud outage never slows or aborts a run. Wired
+  into `executeWorkerItem` for both the local and the Cloud-managed bundle path.
+- `cmdWorker` now builds `queue.Remote` before `newRunner`, so a startup failure — most often
+  a missing `.trilha/` — has somewhere to report itself: `_ = q.Heartbeat(ctx, "failed", err)`
+  before returning the error. `queue.Remote.Heartbeat` takes an optional error string
+  (`Heartbeat(ctx, status, errorText ...string)`) carried as `"error"` in the JSON body.
+  `runRemoteWorker` also sends a best-effort `stopping` heartbeat (3-second timeout) when its
+  context is cancelled, so a systemd `SIGTERM` shows up in the fleet panel instead of just
+  going quiet.
+
 ## 0.3.2 — 2026-09-19
 
 ### Fixed

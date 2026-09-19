@@ -45,6 +45,17 @@ type workerOutcome struct {
 }
 
 func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, base *runner.Runner, delivery deployer.Config, deliveryEnabled bool, options workerOptions) error {
+	// A run in progress reports its own infrastructure failures in
+	// Result.Error; this heartbeat only covers the worker itself stopping —
+	// SIGTERM from systemd today — reported best-effort so the fleet panel
+	// does not have to infer a shutdown from a heartbeat that just stops.
+	defer func() {
+		if ctx.Err() != nil {
+			stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = remote.Heartbeat(stopCtx, "stopping")
+		}
+	}()
 	capacity := options.Capacity
 	if capacity <= 0 {
 		capacity = 1
@@ -158,6 +169,7 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 	}
 	active := *base
 	active.AI = itemAI(item.AI)
+	active.Progress = progressReporter(ctx, remote, item)
 	applyDriverPreset(&active, item.AI)
 	bundle, bundleErr := remote.Bundle(ctx, item)
 	if bundleErr == nil {
@@ -199,6 +211,7 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 						created.MaxAttempts = options.Attempts
 						created.RetryBase = options.RetryBase
 						created.AI = itemAI(item.AI)
+						created.Progress = progressReporter(ctx, remote, item)
 						applyDriverPreset(created, item.AI)
 						active = *created
 					}
@@ -218,6 +231,25 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 	}
 	report := resultReport(result, runErr)
 	return workerOutcome{item: item, result: result, report: report}
+}
+
+// progressReporter adapts a runner.Event to a best-effort POST against the
+// control plane. The runner's Progress hook never parses Log strings; this
+// is the one place the structured event turns into the wire shape.
+func progressReporter(ctx context.Context, remote queue.Remote, item queue.Item) func(runner.Event) {
+	return func(e runner.Event) {
+		_ = remote.Progress(ctx, item, queue.Progress{
+			Phase:         e.Phase,
+			Message:       e.Message,
+			Attempt:       e.Attempt,
+			MaxAttempts:   e.MaxAttempts,
+			Branch:        e.Branch,
+			Model:         e.Model,
+			AttemptStatus: e.AttemptStatus,
+			FailureClass:  e.FailureClass,
+			ErrorCode:     e.ErrorCode,
+		})
+	}
 }
 
 func applyDriverPreset(active *runner.Runner, config *queue.AI) {

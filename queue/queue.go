@@ -159,6 +159,21 @@ func (result Result) MarshalJSON() ([]byte, error) {
 	return json.Marshal(object)
 }
 
+// Progress is a structured phase notification sent best-effort while a run
+// is in progress; it mirrors runner.Event field for field. Every field is
+// optional, but the control plane requires at least one of Phase or Message.
+type Progress struct {
+	Phase         string `json:"phase,omitempty"`
+	Message       string `json:"message,omitempty"`
+	Attempt       int    `json:"attempt,omitempty"`
+	MaxAttempts   int    `json:"max_attempts,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+	Model         string `json:"model,omitempty"`
+	AttemptStatus string `json:"attempt_status,omitempty"`
+	FailureClass  string `json:"failure_class,omitempty"`
+	ErrorCode     string `json:"error_code,omitempty"`
+}
+
 type Attempt struct {
 	Number        int       `json:"number"`
 	Status        string    `json:"status"`

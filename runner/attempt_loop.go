@@ -41,6 +41,7 @@ func (l *attemptLoop) run() (*Result, error) {
 		attemptStart := time.Now()
 		l.result.Attempt = attemptNumber
 		l.runner.logf("attempt %d/%d: driver %s starting", attemptNumber, l.maxAttempts, l.driver.Name())
+		l.runner.progress(Event{Phase: "consulting_ai", Attempt: attemptNumber, MaxAttempts: l.maxAttempts, Model: l.model()})
 		output, executionErr := l.driver.Execute(l.ctx, driver.Job{Task: l.item, Agent: l.manifest, Prompt: l.prompt, Dir: l.dir, Command: l.runner.Command, Env: l.env, Attempt: attemptNumber, Checkpoint: checkpoint, AllowedChecks: l.checks, AI: l.ai, Prefix: l.prefix})
 		if err := l.captureOutput(logPath, output); err != nil {
 			return l.fail("evidence", err)
@@ -65,6 +66,7 @@ func (l *attemptLoop) run() (*Result, error) {
 				delay := l.runner.retryDelay(attemptNumber, executionErr)
 				l.result.Attempts[len(l.result.Attempts)-1].Status = "recovered"
 				l.runner.logf("attempt %d failed transiently; retrying in %s", attemptNumber, delay.Round(time.Millisecond))
+				l.runner.progress(Event{Phase: "retry_wait", Attempt: attemptNumber, MaxAttempts: l.maxAttempts, AttemptStatus: "failed", FailureClass: failureClass})
 				if err := waitRetry(l.ctx, delay); err != nil {
 					return l.fail("execution", err)
 				}
@@ -90,6 +92,7 @@ func (l *attemptLoop) run() (*Result, error) {
 			l.result.Passed = true
 			l.result.Status = task.Review
 			l.result.Elapsed = time.Since(l.started)
+			l.runner.progress(Event{Phase: "integrating", Attempt: attemptNumber, MaxAttempts: l.maxAttempts, AttemptStatus: "passed"})
 			l.runner.logf("%s is now %s (%d attempts, passed=true)", l.item.ID, task.Review, attemptNumber)
 			return l.result, nil
 		}
@@ -111,6 +114,7 @@ func (l *attemptLoop) run() (*Result, error) {
 		}
 		delay := l.runner.retryDelay(attemptNumber, errors.New("verification failed"))
 		l.runner.logf("checks failed; corrective attempt %d starts in %s", attemptNumber+1, delay.Round(time.Millisecond))
+		l.runner.progress(Event{Phase: "retry_wait", Attempt: attemptNumber, MaxAttempts: l.maxAttempts, AttemptStatus: "failed", FailureClass: "checks_failed"})
 		if err := waitRetry(l.ctx, delay); err != nil {
 			return l.fail("verify", err)
 		}
@@ -121,4 +125,18 @@ func (l *attemptLoop) run() (*Result, error) {
 func attemptFromOutput(number int, status, failureClass string, started time.Time, output driver.Output) Attempt {
 	tokens := fieldInt(output.Meta["tokens"], 0)
 	return Attempt{Number: number, Status: status, FailureClass: failureClass, Model: output.Meta["model"], TotalTokens: tokens, EstimatedCost: estimateCost(tokens), Started: started, Finished: time.Now()}
+}
+
+// model answers the model the next attempt will ask for, mirroring the
+// resolution order driver.AI itself applies: the claim's AI config, then the
+// agent manifest. Neither is known yet at consulting_ai time from the
+// driver's output, so this is the best information available up front.
+func (l *attemptLoop) model() string {
+	if l.ai != nil && l.ai.Model != "" {
+		return l.ai.Model
+	}
+	if l.manifest != nil && l.manifest.Model != "" {
+		return l.manifest.Model
+	}
+	return ""
 }
