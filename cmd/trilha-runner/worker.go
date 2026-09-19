@@ -70,6 +70,10 @@ func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, ba
 				break
 			}
 			if err != nil {
+				if ctx.Err() != nil {
+					// The worker was told to stop while claiming: a shutdown, not a failure.
+					return nil
+				}
 				return err
 			}
 			claimed = true
