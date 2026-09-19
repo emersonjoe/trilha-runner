@@ -32,7 +32,9 @@ usage: trilha-runner <command> [flags]
 
   run <task-id> [--driver exec|claude-code|ai|echo] [--cmd "claude -p -"] [--json]
                          run one ready task in its own worktree, verify, record evidence
-  next [flags of run]    run the first task that is ready with every dependency done
+  next [flags of run] [--repo trilha=../trilha]
+                         run the first task that is ready with every dependency done,
+                         including dependencies in the sibling checkouts --repo names
   worker --cloud URL --token T --project P [--workspace-root DIR] [--repo URL]
          [--default-branch main] [--push] [--name N] [--once] [--every 10s]
          [--label docker --label region:br] [--capacity 2]
@@ -134,6 +136,8 @@ func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error
 	drv := fs.String("driver", "", "exec | claude-code | ai | echo (default: the agent manifest's)")
 	command := fs.String("cmd", "", "command for the exec driver")
 	asJSON := fs.Bool("json", false, "print the result as JSON")
+	var repos repeated
+	fs.Var(&repos, "repo", "a sibling checkout for cross-repository dependencies, repeatable: alias=path")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -149,7 +153,10 @@ func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error
 		}
 		res, err = r.Run(ctx, pos[0])
 	} else {
-		res, err = r.Next(ctx)
+		var id string
+		if id, err = nextTask(ctx, r, repos, out); err == nil {
+			res, err = r.Run(ctx, id)
+		}
 	}
 	if res != nil {
 		if *asJSON {
@@ -159,6 +166,36 @@ func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error
 		}
 	}
 	return err
+}
+
+// nextTask picks the task to run: the first one that is ready with every
+// dependency done, in this repository and — when --repo named the sibling
+// checkouts — in the others. What it passed over is printed, so an agenda
+// that is waiting says what for instead of "nothing to run".
+func nextTask(ctx context.Context, r *runner.Runner, repos []string, out io.Writer) (string, error) {
+	q := queue.Local{Store: r.Store, By: "trilha-runner next"}
+	if len(repos) > 0 {
+		checkouts := queue.Checkouts{}
+		for _, value := range repos {
+			alias, dir, err := queue.ParseRepo(value)
+			if err != nil {
+				return "", err
+			}
+			checkouts[alias] = dir
+		}
+		q.Resolver = checkouts
+	}
+	item, waiting, err := q.NextWaiting(ctx)
+	for _, w := range waiting {
+		fmt.Fprintf(out, "· %s\n", w)
+	}
+	if errors.Is(err, queue.ErrEmpty) {
+		return "", runner.ErrNothing
+	}
+	if err != nil {
+		return "", err
+	}
+	return item.TaskID, nil
 }
 
 func printResult(out io.Writer, res *runner.Result) {

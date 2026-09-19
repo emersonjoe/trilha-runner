@@ -71,3 +71,61 @@ func TestRunEcho(t *testing.T) {
 		t.Fatalf("drivers:\n%s", out)
 	}
 }
+
+// `next --repo alias=path` resolves a dependency in a sibling checkout: the
+// task is held while the other repository's task is open, and runs once it
+// is done.
+func TestNextAcrossRepositories(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	repo := func(dir string, files map[string]string) {
+		sh(t, dir, "git", "init", "-q", "-b", "main")
+		sh(t, dir, "git", "config", "user.email", "t@t")
+		sh(t, dir, "git", "config", "user.name", "t")
+		os.MkdirAll(filepath.Join(dir, ".trilha", "tasks"), 0o755)
+		os.WriteFile(filepath.Join(dir, ".trilha", "project.md"), []byte("---\nname: demo\n---\n"), 0o644)
+		for name, body := range files {
+			os.WriteFile(filepath.Join(dir, ".trilha", "tasks", name+".md"), []byte(body), 0o644)
+		}
+		sh(t, dir, "git", "add", "-A")
+		sh(t, dir, "git", "commit", "-q", "-m", "init")
+	}
+	framework := t.TempDir()
+	repo(framework, map[string]string{
+		"TASK-004": "---\nid: TASK-004\ntitle: Framework work\nstatus: ready\nacceptance:\n  - it works\n---\n",
+	})
+	product := t.TempDir()
+	repo(product, map[string]string{
+		"TASK-005": "---\nid: TASK-005\ntitle: Product work\nstatus: ready\nacceptance:\n  - it works\n" +
+			"checks:\n  - \"sh -c \\\"test -f TRILHA_RUN.md\\\"\"\ndepends_on_remote:\n  - trilha:TASK-004\n---\n",
+	})
+
+	// Held: the framework task is not done.
+	held := exec.Command(bin, "next", "--driver", "echo", "--repo", "trilha="+framework)
+	held.Dir = product
+	out, err := held.CombinedOutput()
+	if err == nil {
+		t.Fatalf("the task ran despite its cross-repository dependency:\n%s", out)
+	}
+	if !strings.Contains(string(out), "waiting:trilha:TASK-004") {
+		t.Fatalf("out:\n%s", out)
+	}
+
+	// The framework task finishes.
+	for _, to := range []string{"running", "verify", "review", "done"} {
+		body, _ := os.ReadFile(filepath.Join(framework, ".trilha", "tasks", "TASK-004.md"))
+		os.WriteFile(filepath.Join(framework, ".trilha", "tasks", "TASK-004.md"),
+			[]byte(strings.Replace(string(body), "status: "+previous(to), "status: "+to, 1)), 0o644)
+	}
+
+	// Released: the same command now runs it.
+	if out := sh(t, product, bin, "next", "--driver", "echo", "--repo", "trilha="+framework); !strings.Contains(out, "TASK-005 → review") {
+		t.Fatalf("out:\n%s", out)
+	}
+}
+
+// previous is the status a task was in before `to`, for the e2e's hand-edits.
+func previous(to string) string {
+	return map[string]string{"running": "ready", "verify": "running", "review": "verify", "done": "review"}[to]
+}
