@@ -5,6 +5,44 @@
       "rollback": ["/usr/local/libexec/trilha/rollback-product"],
       "health_url": "https://app.example.com/health/ready",
       "timeout_seconds": 600
+    },
+    "compose": {
+      "steps": [
+        {
+          "name": "pull",
+          "argv": ["docker", "compose", "-f", "/srv/acervo/compose.homelab.yml", "pull"],
+          "timeout_seconds": 600
+        },
+        {
+          "name": "database",
+          "argv": ["docker", "compose", "-f", "/srv/acervo/compose.homelab.yml", "up", "-d", "--wait", "postgres"],
+          "timeout_seconds": 300
+        },
+        {
+          "name": "switch",
+          "argv": ["docker", "compose", "-f", "/srv/acervo/compose.homelab.yml", "up", "-d", "--wait"],
+          "switch": true,
+          "timeout_seconds": 600
+        },
+        {
+          "name": "prune",
+          "argv": ["docker", "image", "prune", "-f"],
+          "on_fail": "continue"
+        }
+      ],
+      "migrate": {
+        "argv": ["docker", "compose", "-f", "/srv/acervo/compose.homelab.yml", "exec", "-T", "api", "alembic", "upgrade", "head"],
+        "downgrade": ["docker", "compose", "-f", "/srv/acervo/compose.homelab.yml", "exec", "-T", "api", "alembic", "downgrade", "-1"],
+        "reversible": true,
+        "timeout_seconds": 900
+      },
+      "rollback": ["/usr/local/libexec/trilha/rollback-compose"],
+      "health": [
+        { "name": "api", "url": "https://acervo.example.com/health/ready", "timeout_seconds": 180 },
+        { "name": "web", "url": "https://acervo.example.com/", "timeout_seconds": 180 },
+        { "name": "worker", "url": "https://acervo.example.com/health/worker", "timeout_seconds": 300 }
+      ],
+      "timeout_seconds": 1800
     }
   }
 }
