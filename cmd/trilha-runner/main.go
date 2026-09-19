@@ -26,7 +26,7 @@ import (
 	"github.com/emersonjoe/trilha-spec/agent"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 const usage = `trilha-runner ` + version + ` — executes tasks of the Trilha protocol
 
