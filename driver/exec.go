@@ -28,12 +28,10 @@ func (ClaudeCode) Name() string { return "claude-code" }
 
 func (ClaudeCode) Execute(ctx context.Context, job Job) (Output, error) {
 	job.Command = claudeCodeCommand(job.AI)
-	if job.AI != nil && job.AI.Credential != "" {
-		name := "ANTHROPIC_API_KEY"
-		if strings.Contains(strings.ToLower(job.AI.Provider), "oauth") {
-			name = "CLAUDE_CODE_OAUTH_TOKEN"
-		}
-		job.Env = append(job.Env, name+"="+job.AI.Credential)
+	// Inside a sandbox the credential is already in the container, put there
+	// by Prepare; adding it here would also put it on the host's argv.
+	if len(job.Prefix) == 0 {
+		job.Env = append(job.Env, CredentialEnv(job.AI)...)
 	}
 	output, err := (Exec{}).Execute(ctx, job)
 	if output.Meta == nil {
@@ -86,8 +84,11 @@ func (Exec) Execute(ctx context.Context, job Job) (Output, error) {
 	innerEnvironment := append([]string{"TRILHA_TASK=" + job.Task.ID, "TRILHA_WORKTREE=" + runtimeDir}, job.Env...)
 	program, commandArgs := args[0], args[1:]
 	if len(job.Prefix) > 0 {
+		// The prefix enters a sandbox that already holds this run's
+		// environment. Passing it again as arguments would publish every
+		// value — the project's credential among them — to `ps` on the host.
 		program = job.Prefix[0]
-		commandArgs = append(append(append([]string(nil), job.Prefix[1:]...), innerEnvironment...), args...)
+		commandArgs = append(append([]string(nil), job.Prefix[1:]...), args...)
 	}
 	cmd := exec.CommandContext(ctx, program, commandArgs...)
 	cmd.Dir = job.Dir

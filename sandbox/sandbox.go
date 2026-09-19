@@ -1,6 +1,11 @@
 // Package sandbox confines execution. None uses the task worktree directly;
 // Docker mounts that worktree as the only writable host path and starts any
 // declared services on a private per-run network.
+//
+// A run's environment is handed to Prepare rather than to each command,
+// because a secret belongs in the container and not on a command line: an
+// argument of `docker exec` is an argument of a host process, and `ps` shows
+// it to every user on the machine.
 package sandbox
 
 import (
@@ -12,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,10 +32,13 @@ type Env struct {
 	Prefix []string
 }
 
-// Sandbox prepares and releases an execution environment.
+// Sandbox prepares and releases an execution environment. env is the run's
+// environment as KEY=VALUE, including any credential the queue supplied: a
+// sandbox that moves execution elsewhere must carry it there without putting
+// it on a command line.
 type Sandbox interface {
 	Name() string
-	Prepare(ctx context.Context, dir string) (Env, func() error, error)
+	Prepare(ctx context.Context, dir string, env []string) (Env, func() error, error)
 }
 
 // None runs in place: the worktree is the sandbox.
@@ -37,8 +46,10 @@ type None struct{}
 
 func (None) Name() string { return "none" }
 
-func (None) Prepare(ctx context.Context, dir string) (Env, func() error, error) {
-	return Env{Dir: dir}, func() error { return nil }, nil
+// Prepare answers the directory as is. The environment travels with the
+// process, as it always did, so it is handed straight back.
+func (None) Prepare(ctx context.Context, dir string, env []string) (Env, func() error, error) {
+	return Env{Dir: dir, Env: env}, func() error { return nil }, nil
 }
 
 // Service is a private dependency container declared by the agent manifest.
@@ -105,7 +116,7 @@ func (d Docker) command(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, binary, args...)
 }
 
-func (d Docker) Prepare(ctx context.Context, dir string) (Env, func() error, error) {
+func (d Docker) Prepare(ctx context.Context, dir string, env []string) (Env, func() error, error) {
 	if _, err := exec.LookPath(first(d.Binary, "docker")); err != nil {
 		return Env{}, nil, fmt.Errorf("sandbox: docker unavailable: %w", err)
 	}
@@ -132,9 +143,12 @@ func (d Docker) Prepare(ctx context.Context, dir string) (Env, func() error, err
 		}
 		return nil
 	}
+	// On failure whatever was created is removed here and now, and the
+	// release answered is a no-op rather than nil: a caller that defers it
+	// without checking the error should not panic for being careless.
 	fail := func(cause error) (Env, func() error, error) {
 		_ = cleanup()
-		return Env{}, nil, cause
+		return Env{}, func() error { return nil }, cause
 	}
 	if output, err := d.command(ctx, "network", "create", "--label", "trilha.run="+id, network).CombinedOutput(); err != nil {
 		return fail(fmt.Errorf("sandbox: create network: %w: %s", err, strings.TrimSpace(string(output))))
@@ -158,17 +172,32 @@ func (d Docker) Prepare(ctx context.Context, dir string) (Env, func() error, err
 			return fail(fmt.Errorf("sandbox: start service %s: %w: %s", service.Name, err, strings.TrimSpace(string(output))))
 		}
 		containers = append(containers, name)
+		if err := d.ensureUp(ctx, name, "service "+service.Name); err != nil {
+			return fail(err)
+		}
 		if len(service.Ready) > 0 {
 			if err := d.waitReady(ctx, name, service.Ready); err != nil {
 				return fail(fmt.Errorf("sandbox: service %s: %w", service.Name, err))
 			}
 		}
 	}
+	// The run's environment enters the container once, through a file only
+	// this user can read, so no secret is ever an argument of a host process.
+	environmentFile, err := writeEnvironmentFile(env)
+	if environmentFile != "" {
+		previous := cleanup
+		cleanup = func() error { defer os.Remove(environmentFile); return previous() }
+	}
+	if err != nil {
+		return fail(err)
+	}
 	args := []string{"run", "-d", "--name", mainContainer, "--label", "trilha.run=" + id, "--network", network}
 	args = append(args, resourceLimits()...)
+	args = append(args, agentPrivileges()...)
 	args = append(args,
 		"--tmpfs", "/tmp:rw,nosuid,nodev",
 		"--tmpfs", "/run:rw,nosuid,nodev",
+		"--env-file", environmentFile,
 		"--mount", "type=bind,src="+absolute+",dst=/workspace",
 		"--workdir", "/workspace", d.Image, "tail", "-f", "/dev/null",
 	)
@@ -176,7 +205,84 @@ func (d Docker) Prepare(ctx context.Context, dir string) (Env, func() error, err
 		return fail(fmt.Errorf("sandbox: start agent: %w: %s", err, strings.TrimSpace(string(output))))
 	}
 	containers = append(containers, mainContainer)
-	return Env{Dir: absolute, Prefix: []string{first(d.Binary, "docker"), "exec", "-i", "--workdir", "/workspace", mainContainer, "env"}}, cleanup, nil
+	if err := d.ensureUp(ctx, mainContainer, "the agent container"); err != nil {
+		return fail(err)
+	}
+	// No `env` on the prefix: the container already holds the environment.
+	return Env{Dir: absolute, Prefix: []string{first(d.Binary, "docker"), "exec", "-i", "--workdir", "/workspace", mainContainer}}, cleanup, nil
+}
+
+// agentPrivileges drops what the agent does not need and runs it as the user
+// that owns the worktree.
+//
+// The two go together and cannot be separated. Dropping every capability
+// removes CAP_DAC_OVERRIDE, and root then stops bypassing file permission
+// checks — so a worktree owned by the operator becomes unwritable by a root
+// agent, and the sandbox quietly stops being able to do its job. Running as
+// the owner is what keeps the one writable path writable, and it makes the
+// agent something less than root while it is there.
+func agentPrivileges() []string {
+	out := []string{"--cap-drop", "ALL"}
+	if uid := os.Getuid(); uid >= 0 {
+		out = append(out, "--user", strconv.Itoa(uid)+":"+strconv.Itoa(os.Getgid()))
+	}
+	return out
+}
+
+// writeEnvironmentFile puts the run's environment where only this user can
+// read it. HOME comes first so anything the run sets overrides it: a plain uid
+// has no home of its own and most toolchains want one, and the tmpfs is the
+// writable path that is not the worktree.
+func writeEnvironmentFile(env []string) (string, error) {
+	file, err := os.CreateTemp("", "trilha-sandbox-*.env")
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	if err := file.Chmod(0o600); err != nil {
+		return file.Name(), err
+	}
+	for _, line := range append([]string{"HOME=/tmp", "TRILHA_WORKTREE=/workspace"}, env...) {
+		// An env file is one KEY=VALUE per line, so a value with a newline in
+		// it would smuggle in a second variable.
+		if strings.ContainsAny(line, "\n\x00") {
+			return file.Name(), errors.New("sandbox: an environment value contains a newline")
+		}
+		if _, err := fmt.Fprintln(file, line); err != nil {
+			return file.Name(), err
+		}
+	}
+	return file.Name(), nil
+}
+
+// up answers whether a container is still running.
+func (d Docker) up(ctx context.Context, container string) (bool, error) {
+	output, err := d.command(ctx, "inspect", "--format", "{{.State.Running}}", container).Output()
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(output)) == "true", nil
+}
+
+// ensureUp fails with the container's own output when it did not stay up — an
+// image whose keep-alive command is missing, a service whose entrypoint exited
+// — instead of leaving that to surface later as an unexplained `docker exec`
+// failure, or as a readiness timeout spent waiting for something already gone.
+func (d Docker) ensureUp(ctx context.Context, container, what string) error {
+	running, err := d.up(ctx, container)
+	if err != nil {
+		return fmt.Errorf("sandbox: inspect %s: %w", container, err)
+	}
+	if running {
+		return nil
+	}
+	message := fmt.Sprintf("sandbox: %s exited instead of staying up (container %s)", what, container)
+	if logs, err := d.command(ctx, "logs", "--tail", "20", container).CombinedOutput(); err == nil {
+		if text := strings.TrimSpace(string(logs)); text != "" {
+			message += ": " + text
+		}
+	}
+	return errors.New(message)
 }
 
 func resourceLimits() []string {

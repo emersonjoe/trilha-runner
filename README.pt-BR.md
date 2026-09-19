@@ -107,10 +107,23 @@ sandbox:
   services: '[{"name":"db","image":"pgvector/pgvector:pg16","env":{"POSTGRES_PASSWORD":"test"},"ready":["pg_isready","-U","postgres"]}]'
 ```
 
-O runner cria uma rede privada, inicia os serviços declarados, monta somente o worktree em
-`/workspace` e executa drivers externos e checks via `docker exec`. Limites de CPU, memória,
-PIDs, raiz somente leitura e `no-new-privileges` são fixos no runner. O socket Docker nunca é
-montado no container do agente, e o teardown remove containers e rede em todos os caminhos.
+O runner cria uma rede privada, sobe os serviços declarados, monta só o worktree em
+`/workspace` e executa drivers externos e checks por `docker exec`. CPU, memória, PIDs, raiz
+somente leitura, `cap-drop ALL` e `no-new-privileges` são fixos no runner. O socket Docker nunca é
+montado no container do agente, e o teardown remove containers e rede em todo caminho. Um
+container que não fica de pé é reportado com a saída dele mesmo, em vez de aparecer depois como
+uma falha inexplicada de `docker exec`.
+
+Duas propriedades merecem ser ditas com clareza, porque são o que torna o sandbox utilizável e
+seguro ao mesmo tempo:
+
+- **O agente não é root.** Ele roda como o usuário dono do worktree. Com todas as capabilities
+  derrubadas não existe `CAP_DAC_OVERRIDE` de reserva, então é exatamente isso que mantém
+  gravável o único caminho gravável — e faz do agente algo menor que root enquanto está lá.
+- **Nenhum segredo vai para linha de comando.** O ambiente da execução, credencial do projeto
+  incluída, entra no container uma vez por um arquivo `0600` no `docker run`. O `docker exec` não
+  carrega nenhum `KEY=VALUE`, porque argumento de `docker exec` é argumento de um processo no
+  *host*, e o `ps` mostra isso para qualquer usuário da máquina.
 
 ## Pacotes
 

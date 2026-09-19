@@ -175,7 +175,10 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 			sb = configured
 		}
 	}
-	env, release, err := sb.Prepare(ctx, wt.Path)
+	// The run's environment is handed to the sandbox, not to each command: a
+	// sandbox that moves execution elsewhere has to carry the credential there
+	// without ever making it an argument of a host process.
+	env, release, err := sb.Prepare(ctx, wt.Path, append([]string{"TRILHA_TASK=" + id}, driver.CredentialEnv(r.AI)...))
 	if err != nil {
 		return fail("sandbox", err)
 	}

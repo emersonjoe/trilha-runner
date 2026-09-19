@@ -108,8 +108,22 @@ sandbox:
 
 The runner creates a private network, starts declared services, mounts only the worktree at
 `/workspace`, and executes external drivers and checks through `docker exec`. CPU, memory, PID,
-read-only-root and `no-new-privileges` limits are fixed by the runner. The Docker socket is never
-mounted into the agent container, and teardown removes containers and the network on every path.
+read-only-root, `cap-drop ALL` and `no-new-privileges` limits are fixed by the runner. The Docker
+socket is never mounted into the agent container, and teardown removes containers and the network
+on every path. A container that does not stay up is reported with its own output rather than
+surfacing later as an unexplained `docker exec` failure.
+
+Two properties are worth stating plainly, because they are what make the sandbox usable and
+safe at the same time:
+
+- **The agent is not root.** It runs as the user that owns the worktree. With every capability
+  dropped there is no `CAP_DAC_OVERRIDE` to fall back on, so this is precisely what keeps the
+  one writable path writable — and it makes the agent something less than root while it is
+  there.
+- **No secret is ever on a command line.** The run's environment, the project's credential
+  included, enters the container once through a `0600` file at `docker run`. `docker exec`
+  carries no `KEY=VALUE`, because an argument of `docker exec` is an argument of a process on
+  the *host*, and `ps` shows it to every user on the machine.
 
 ## Packages
 
