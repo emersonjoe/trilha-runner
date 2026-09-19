@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +21,6 @@ import (
 	"github.com/emersonjoe/trilha-runner/driver"
 	"github.com/emersonjoe/trilha-runner/queue"
 	"github.com/emersonjoe/trilha-runner/runner"
-	"github.com/emersonjoe/trilha-runner/syncer"
 	"github.com/emersonjoe/trilha-runner/worktree"
 )
 
@@ -35,10 +35,15 @@ usage: trilha-runner <command> [flags]
   next [flags of run]    run the first task that is ready with every dependency done
   worker --cloud URL --token T --project P [--workspace-root DIR] [--repo URL]
          [--default-branch main] [--push] [--name N] [--once] [--every 10s]
+         [--label docker --label region:br] [--capacity 2]
                          take runs from trilha-cloud and report results
   worktree list | clean <task-id>
   drivers                the drivers available
   version
+
+--label declares what this host can do (repeatable; TRILHA_WORKER_LABELS) and --capacity how
+many runs it executes at once (TRILHA_WORKER_CAPACITY): both ride the heartbeat and the claim,
+so the control plane routes a run to a host that meets its requirements.
 
 The driver comes from the task's agent manifest (.trilha/agents/<name>.md) unless --driver
 is given. exec needs a command (manifest or --cmd); ai reads OPENAI_BASE_URL, OPENAI_API_KEY
@@ -179,10 +184,6 @@ func printJSON(out io.Writer, v any) {
 	enc.Encode(v)
 }
 
-// cmdWorker is the fleet's unit: one process on one checkout of one
-// project, asking trilha-cloud for the next run, executing it locally and
-// reporting back. The checkout is the operator's; the cloud never sees the
-// code, only the result and the evidence.
 func cmdWorker(ctx context.Context, args []string, out io.Writer) error {
 	fs := flags("worker")
 	cloud := fs.String("cloud", os.Getenv("TRILHA_CLOUD_URL"), "control plane URL")
@@ -198,127 +199,79 @@ func cmdWorker(ctx context.Context, args []string, out io.Writer) error {
 	defaultBranch := fs.String("default-branch", os.Getenv("TRILHA_DEFAULT_BRANCH"), "trusted default branch override")
 	push := fs.Bool("push", false, "publish synchronized spec and implementation branches")
 	deployConfig := fs.String("delivery-config", os.Getenv("TRILHA_DELIVERY_CONFIG"), "JSON file with local allow-listed deployment profiles")
+	labels := repeated(envList("TRILHA_WORKER_LABELS"))
+	fs.Var(&labels, "label", "a capability of this host, repeatable: docker, gpu, region:br")
+	capacity := fs.Int("capacity", envInt("TRILHA_WORKER_CAPACITY", 1), "how many runs to execute at once")
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
 	if *cloud == "" || *token == "" || *project == "" {
 		return errors.New("worker needs --cloud, --token and --project")
 	}
-	r, err := newRunner(*drv, *command, out)
+	if *capacity < 1 {
+		return errors.New("--capacity must be at least 1")
+	}
+	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	r.By = "trilha-runner worker " + *name
-	q := queue.Remote{BaseURL: strings.TrimSuffix(*cloud, "/"), Token: *token, Worker: *name, Project: *project}
-	var delivery deployer.Config
+	options := workerOptions{
+		Queue: queue.Remote{
+			BaseURL: strings.TrimSuffix(*cloud, "/"), Token: *token, Worker: *name, Project: *project,
+			Capabilities: queue.Capabilities{Labels: labels, Capacity: *capacity, Runner: version, Drivers: driver.Names()},
+		},
+		Name: *name, Dir: cwd, Driver: *drv, Command: *command,
+		WorkspaceRoot: *workspaceRoot, Repository: *repository, DefaultBranch: *defaultBranch,
+		Push: *push, Capacity: *capacity, Once: *once, Every: *every, Out: out,
+		Progress: func(s string) { fmt.Fprintln(os.Stderr, "·", s) },
+	}
 	if *deployConfig != "" {
-		delivery, err = deployer.Load(*deployConfig)
-		if err != nil {
+		if options.Delivery, err = deployer.Load(*deployConfig); err != nil {
 			return err
 		}
+		options.HasDelivery = true
 	}
-	if err := q.Heartbeat(ctx, "idle"); err != nil {
-		return err
+	fmt.Fprintf(os.Stderr, "worker %s on %s, project %s (capacity %d%s)\n", *name, *cloud, *project, *capacity, labelSuffix(labels))
+	return runWorker(ctx, options)
+}
+
+func labelSuffix(labels []string) string {
+	if len(labels) == 0 {
+		return ""
 	}
-	fmt.Fprintf(os.Stderr, "worker %s on %s, project %s\n", *name, *cloud, *project)
-	for {
-		item, err := q.Next(ctx)
-		switch {
-		case errors.Is(err, queue.ErrEmpty):
-			if *deployConfig != "" {
-				work, deploymentErr := q.NextDeployment(ctx)
-				if deploymentErr == nil {
-					q.Heartbeat(ctx, "deploying "+work.Deployment.Environment)
-					result := delivery.Execute(ctx, work)
-					if err := q.DoneDeployment(ctx, work, queue.DeploymentResult{Passed: result.Passed, Log: result.Log, Health: result.Health, Error: result.Error}); err != nil {
-						return err
-					}
-					q.Heartbeat(ctx, "idle")
-					fmt.Fprintf(out, "%s → %s (%s)\n", work.Deployment.ID, map[bool]string{true: "succeeded", false: "failed"}[result.Passed], work.Deployment.Environment)
-					if *once {
-						return nil
-					}
-					continue
-				}
-				if !errors.Is(deploymentErr, queue.ErrEmpty) {
-					return deploymentErr
-				}
-			}
-			if *once {
-				fmt.Fprintln(out, "nothing to run")
-				return nil
-			}
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(*every):
-			}
-			continue
-		case err != nil:
-			return err
-		}
-		q.Heartbeat(ctx, "running "+item.TaskID)
-		activeRunner := r
-		bundle, bundleErr := q.Bundle(ctx, item)
-		if bundleErr == nil {
-			if *workspaceRoot == "" {
-				return errors.New("worker needs --workspace-root for Cloud-managed work bundles")
-			}
-			bundleRepository := bundle.Repository
-			if *repository != "" {
-				if bundleRepository != "" && bundleRepository != *repository {
-					return errors.New("worker repository does not match the Cloud project")
-				}
-				bundleRepository = *repository
-			}
-			bundleBranch := bundle.DefaultBranch
-			if *defaultBranch != "" {
-				if bundleBranch != "" && bundleBranch != *defaultBranch {
-					return errors.New("worker default branch does not match the Cloud project")
-				}
-				bundleBranch = *defaultBranch
-			}
-			repositoryCheckout, err := syncer.EnsureRepository(ctx, *workspaceRoot, item.Project, bundleRepository, bundleBranch)
-			if err != nil {
-				bundleErr = err
-			} else if _, _, err := syncer.Materialize(ctx, repositoryCheckout, bundle, *push); err != nil {
-				bundleErr = err
-			} else {
-				activeRunner, bundleErr = newRunnerAt(repositoryCheckout.Path, *drv, *command, out)
-				if bundleErr == nil {
-					activeRunner.By = "trilha-runner worker " + *name
-				}
-			}
-		}
-		var res *runner.Result
-		var runErr error
-		if bundleErr != nil && !errors.Is(bundleErr, queue.ErrNoBundle) {
-			runErr = bundleErr
-		} else {
-			res, runErr = activeRunner.Run(ctx, item.TaskID)
-			if runErr == nil && res != nil && *push {
-				runErr = syncer.PushBranch(ctx, res.Worktree, res.Branch)
-			}
-		}
-		report := queue.Result{}
-		if res != nil {
-			report = queue.Result{Passed: res.Passed, Status: string(res.Status), Branch: res.Branch, Commit: res.Commit, Evidence: res.Evidence, Log: res.Output}
-			printResult(out, res)
-		}
-		if runErr != nil {
-			report.Error = runErr.Error()
-			if report.Status == "" {
-				report.Status = "failed"
-			}
-		}
-		if err := q.Done(ctx, item, report); err != nil {
-			return err
-		}
-		q.Heartbeat(ctx, "idle")
-		if *once {
-			return nil
+	return ", labels " + strings.Join(labels, " ")
+}
+
+// repeated is a flag given more than once: --label docker --label region:br.
+type repeated []string
+
+func (r repeated) String() string { return strings.Join(r, ",") }
+
+func (r *repeated) Set(v string) error {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return errors.New("empty value")
+	}
+	*r = append(*r, v)
+	return nil
+}
+
+// envList reads a comma- or space-separated default for a repeated flag.
+func envList(name string) []string {
+	var out []string
+	for _, v := range strings.FieldsFunc(os.Getenv(name), func(r rune) bool { return r == ',' || r == ' ' }) {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
 		}
 	}
+	return out
+}
+
+func envInt(name string, fallback int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name))); err == nil && v > 0 {
+		return v
+	}
+	return fallback
 }
 
 func cmdWorktree(ctx context.Context, args []string, out io.Writer) error {

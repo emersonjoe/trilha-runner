@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -69,5 +70,67 @@ func TestRemote(t *testing.T) {
 	empty = true
 	if _, err := q.Next(context.Background()); err != ErrEmpty {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCapabilitiesMeets(t *testing.T) {
+	c := Capabilities{Labels: []string{"docker", "region:br"}}
+	if ok, missing := c.Meets(nil); !ok || missing != nil {
+		t.Fatalf("no requirement: %v %v", ok, missing)
+	}
+	if ok, _ := c.Meets([]string{"docker"}); !ok {
+		t.Fatal("docker is declared")
+	}
+	ok, missing := c.Meets([]string{"docker", "gpu", "region:us"})
+	if ok || len(missing) != 2 || missing[0] != "gpu" || missing[1] != "region:us" {
+		t.Fatalf("%v %v", ok, missing)
+	}
+}
+
+// The claim carries the capabilities, and a run this worker cannot honour
+// comes back as ErrUnmet with the item, so the caller can report it.
+func TestRemoteCapabilitiesAndUnmetRequirements(t *testing.T) {
+	var got struct {
+		Capabilities
+		Worker, Project string
+	}
+	requires := []string{"docker"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/runs/next":
+			json.NewDecoder(r.Body).Decode(&got)
+			json.NewEncoder(w).Encode(Item{ID: "run-1", Project: "demo", TaskID: "TASK-007", Requires: requires})
+		case "/api/workers/heartbeat":
+			json.NewDecoder(r.Body).Decode(&got)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	q := Remote{BaseURL: srv.URL, Token: "tok", Worker: "w1", Project: "demo",
+		Capabilities: Capabilities{Labels: []string{"region:br"}, Capacity: 2, Runner: "test"}}
+	it, err := q.NextRunning(context.Background(), 1)
+	if !errors.Is(err, ErrUnmet) || it.ID != "run-1" {
+		t.Fatalf("%+v %v", it, err)
+	}
+	if got.Capacity != 2 || got.Running != 1 || got.Runner != "test" || len(got.Labels) != 1 {
+		t.Fatalf("claim = %+v", got)
+	}
+
+	// With the label, the same run is accepted.
+	q.Capabilities.Labels = []string{"region:br", "docker"}
+	if it, err := q.Next(context.Background()); err != nil || it.TaskID != "TASK-007" {
+		t.Fatalf("%+v %v", it, err)
+	}
+
+	// Capacity is never below one, whatever was configured.
+	q.Capabilities.Capacity = 0
+	if err := q.HeartbeatRunning(context.Background(), "idle", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got.Capacity != 1 {
+		t.Fatalf("heartbeat capacity = %d", got.Capacity)
 	}
 }

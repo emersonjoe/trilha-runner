@@ -18,6 +18,43 @@ type Item struct {
 	// Project names the project on the remote side.
 	Project string `json:"project,omitempty"`
 	TaskID  string `json:"task_id"`
+	// Requires are the worker labels this run needs — `docker`, `region:br`.
+	// The control plane filters on them; the worker checks them again,
+	// because a claim it cannot honour must not become a silent failure.
+	Requires []string `json:"requires,omitempty"`
+}
+
+// Capabilities is what a worker says it can do, how much it can take and
+// where it is. A fleet with more than one kind of host — one without
+// Docker, one with a GPU, one in a region a project's data may not leave —
+// is only routable if each host declares itself, so the same payload rides
+// the heartbeat and the claim.
+type Capabilities struct {
+	// Labels are free-form capabilities: `docker`, `gpu`, `region:br`.
+	Labels []string `json:"labels,omitempty"`
+	// Capacity is how many runs this worker executes at once (at least 1).
+	Capacity int `json:"capacity"`
+	// Running is how many it is executing right now.
+	Running int `json:"running"`
+	// Runner is the trilha-runner version; Drivers are the drivers it has.
+	Runner  string   `json:"runner,omitempty"`
+	Drivers []string `json:"drivers,omitempty"`
+}
+
+// Meets answers whether the worker's labels cover every label a run
+// requires, and names the ones missing.
+func (c Capabilities) Meets(requires []string) (bool, []string) {
+	have := make(map[string]bool, len(c.Labels))
+	for _, l := range c.Labels {
+		have[l] = true
+	}
+	var missing []string
+	for _, need := range requires {
+		if !have[need] {
+			missing = append(missing, need)
+		}
+	}
+	return len(missing) == 0, missing
 }
 
 // Bundle is the versioned Trilha Spec context returned by the control plane.
@@ -104,6 +141,10 @@ type DeploymentResult struct {
 
 // ErrEmpty is a queue with nothing to hand out right now.
 var ErrEmpty = errors.New("queue: nothing to run")
+
+// ErrUnmet is a run handed to a worker that does not have what it requires.
+// The run was claimed, so it is reported back rather than dropped.
+var ErrUnmet = errors.New("queue: run requires labels this worker does not have")
 
 // Queue hands out work and takes back results.
 type Queue interface {

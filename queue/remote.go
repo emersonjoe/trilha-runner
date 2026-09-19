@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -17,18 +18,53 @@ var ErrNoBundle = errors.New("queue: run has no work bundle")
 // Remote is a client of trilha-cloud's run queue. The contract is small on
 // purpose, so another control plane can implement it:
 //
-//	POST /api/runs/next            ← {worker, project}   → 200 Item | 204 nothing (a claim: it mutates)
+//	POST /api/runs/next            ← {worker, project, …capabilities}  → 200 Item | 204 nothing (a claim: it mutates)
 //	POST /api/runs/{id}/result     ← Result
-//	POST /api/workers/heartbeat    ← {name, project, status}
+//	POST /api/workers/heartbeat    ← {name, project, status, …capabilities}
 //
 // with `Authorization: Bearer TOKEN` on every call.
+//
+// Both the claim and the heartbeat carry the worker's Capabilities —
+// labels, capacity, how many runs are in flight, the runner version and the
+// drivers it has — so the control plane can route a run that needs Postgres
+// for its checks to the host that has Docker, and keep a project whose data
+// must not leave the country on a worker in that region. A run the control
+// plane still hands over with requirements this worker does not meet is
+// refused here with ErrUnmet rather than executed.
 type Remote struct {
 	BaseURL string
 	Token   string
 	Worker  string
 	Project string
+	// Capabilities travel with every claim and heartbeat.
+	Capabilities Capabilities
 	// HTTPClient defaults to one with a 30-second timeout.
 	HTTPClient *http.Client
+}
+
+// capacity is the declared capacity, never below one.
+func (r Remote) capacity() int {
+	if r.Capabilities.Capacity < 1 {
+		return 1
+	}
+	return r.Capabilities.Capacity
+}
+
+// claim is the body of a claim or a heartbeat: who is asking, for what
+// project, and what it can do.
+type claim struct {
+	Worker  string `json:"worker,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Project string `json:"project"`
+	Status  string `json:"status,omitempty"`
+	Capabilities
+}
+
+func (r Remote) capabilities(running int) Capabilities {
+	c := r.Capabilities
+	c.Capacity = r.capacity()
+	c.Running = running
+	return c
 }
 
 func (r Remote) client() *http.Client {
@@ -59,9 +95,14 @@ func (r Remote) do(ctx context.Context, method, path string, body any) (*http.Re
 	return r.client().Do(req)
 }
 
-// Next asks the control plane for work.
-func (r Remote) Next(ctx context.Context) (Item, error) {
-	resp, err := r.do(ctx, http.MethodPost, "/api/runs/next", map[string]string{"worker": r.Worker, "project": r.Project})
+// Next asks the control plane for work. It is a claim, so it carries the
+// same capabilities as the heartbeat: the control plane filters on them.
+func (r Remote) Next(ctx context.Context) (Item, error) { return r.NextRunning(ctx, 0) }
+
+// NextRunning is Next for a worker with more than one slot: running says how
+// many runs are already in flight, so the control plane sees the real load.
+func (r Remote) NextRunning(ctx context.Context, running int) (Item, error) {
+	resp, err := r.do(ctx, http.MethodPost, "/api/runs/next", claim{Worker: r.Worker, Project: r.Project, Capabilities: r.capabilities(running)})
 	if err != nil {
 		return Item{}, err
 	}
@@ -73,6 +114,9 @@ func (r Remote) Next(ctx context.Context) (Item, error) {
 		var it Item
 		if err := json.NewDecoder(resp.Body).Decode(&it); err != nil {
 			return Item{}, err
+		}
+		if ok, missing := r.Capabilities.Meets(it.Requires); !ok {
+			return it, fmt.Errorf("%w: %s", ErrUnmet, strings.Join(missing, ", "))
 		}
 		return it, nil
 	}
@@ -118,9 +162,15 @@ func (r Remote) Bundle(ctx context.Context, item Item) (Bundle, error) {
 	return bundle, nil
 }
 
-// Heartbeat tells the control plane this worker is alive and what it is doing.
+// Heartbeat tells the control plane this worker is alive, what it is doing,
+// and what it can do.
 func (r Remote) Heartbeat(ctx context.Context, status string) error {
-	resp, err := r.do(ctx, http.MethodPost, "/api/workers/heartbeat", map[string]string{"name": r.Worker, "project": r.Project, "status": status})
+	return r.HeartbeatRunning(ctx, status, 0)
+}
+
+// HeartbeatRunning is Heartbeat with the number of runs in flight.
+func (r Remote) HeartbeatRunning(ctx context.Context, status string, running int) error {
+	resp, err := r.do(ctx, http.MethodPost, "/api/workers/heartbeat", claim{Name: r.Worker, Project: r.Project, Status: status, Capabilities: r.capabilities(running)})
 	if err != nil {
 		return err
 	}
