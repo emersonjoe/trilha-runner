@@ -2,6 +2,13 @@
 
 This project follows semantic versioning.
 
+## 0.3.1 — 2026-09-19
+
+### Fixed
+
+- The `claude-code` preset is selected for `claude-code-oauth` as well (the provider name the control plane sends when the credential is an OAuth token); before, an OAuth project fell through to the manifest's `exec` driver and the credential was never injected.
+- The preset's fixed argv is now `claude -p - --permission-mode acceptEdits`, plus `--model <model>` from the claim when the model id is well-formed; print mode has nobody to answer a permission prompt, so without `acceptEdits` the agent could not write a file.
+
 ## 0.3.0 — 2026-09-18
 
 ### Added
