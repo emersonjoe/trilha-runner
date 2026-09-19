@@ -221,7 +221,7 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 }
 
 func applyDriverPreset(active *runner.Runner, config *queue.AI) {
-	if config != nil && config.Provider == "claude-code" {
+	if config != nil && driver.IsClaudeCode(config.Provider) {
 		active.Driver = driver.ClaudeCode{}
 	}
 }

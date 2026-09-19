@@ -30,12 +30,12 @@ func TestClaudeCodeUsesFixedArgvAndRedactsCredential(t *testing.T) {
 	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
 	j := job(t)
 	j.Command = "claude --unsafe ignored"
-	j.AI = &AIConfig{Provider: "anthropic", Credential: "top-secret"}
+	j.AI = &AIConfig{Provider: "anthropic", Credential: "top-secret", Model: "claude-sonnet-5"}
 	output, err := (ClaudeCode{}).Execute(context.Background(), j)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.Text, "args:-p -") || strings.Contains(output.Text, "--unsafe") {
+	if !strings.Contains(output.Text, "args:-p - --permission-mode acceptEdits --model claude-sonnet-5") || strings.Contains(output.Text, "--unsafe") {
 		t.Fatalf("preset argv was not fixed: %q", output.Text)
 	}
 	if strings.Contains(output.Text, "top-secret") || !strings.Contains(output.Text, "[REDACTED]") {
@@ -118,5 +118,32 @@ func TestToolsStayInside(t *testing.T) {
 		if _, err := runCommand(root, []string{"go version"}).Func(ctx, []byte(`{"command":"sh -c \"exit 2\""}`)); err == nil {
 			t.Fatal("non-allow-listed shell command was accepted")
 		}
+	}
+}
+
+func TestClaudeCodeOAuthProviderSelectsTokenAndDropsBadModel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	root := t.TempDir()
+	program := filepath.Join(root, "claude")
+	if err := os.WriteFile(program, []byte("#!/bin/sh\necho args:$*\necho oauth:$CLAUDE_CODE_OAUTH_TOKEN key:$ANTHROPIC_API_KEY\ncat >/dev/null\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	j := job(t)
+	j.AI = &AIConfig{Provider: "claude-code-oauth", Credential: "top-secret", Model: "--dangerously-skip-permissions"}
+	output, err := (ClaudeCode{}).Execute(context.Background(), j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.Text, "--dangerously") || !strings.Contains(output.Text, "args:-p - --permission-mode acceptEdits\n") {
+		t.Fatalf("a model that is not a model reached argv: %q", output.Text)
+	}
+	if !strings.Contains(output.Text, "oauth:[REDACTED] key:\n") {
+		t.Fatalf("oauth credential not routed to CLAUDE_CODE_OAUTH_TOKEN: %q", output.Text)
+	}
+	if !IsClaudeCode("claude-code-oauth") || !IsClaudeCode("claude-code") || IsClaudeCode("anthropic") {
+		t.Fatal("IsClaudeCode")
 	}
 }
