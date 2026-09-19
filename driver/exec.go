@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -26,7 +27,7 @@ type ClaudeCode struct{}
 func (ClaudeCode) Name() string { return "claude-code" }
 
 func (ClaudeCode) Execute(ctx context.Context, job Job) (Output, error) {
-	job.Command = "claude -p -"
+	job.Command = claudeCodeCommand(job.AI)
 	// Inside a sandbox the credential is already in the container, put there
 	// by Prepare; adding it here would also put it on the host's argv.
 	if len(job.Prefix) == 0 {
@@ -37,8 +38,28 @@ func (ClaudeCode) Execute(ctx context.Context, job Job) (Output, error) {
 		output.Meta = map[string]string{}
 	}
 	output.Meta["driver"] = "claude-code"
-	output.Meta["command"] = "claude -p -"
+	output.Meta["command"] = job.Command
 	return output, err
+}
+
+// IsClaudeCode answers whether a claimed item's provider selects this preset:
+// `claude-code`, or `claude-code-oauth` when the credential is an OAuth token.
+func IsClaudeCode(provider string) bool { return strings.HasPrefix(provider, "claude-code") }
+
+// reModel is the shape of a model id the preset will put on argv. Anything
+// else — spaces, a leading dash — is not a model and is dropped.
+var reModel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+
+// claudeCodeCommand is the preset's argv. It is fixed on purpose: the prompt
+// comes on stdin, edits are accepted without a prompt because print mode has
+// nobody to ask (checks run afterwards, by the runner, not by the agent), and
+// the only value the control plane chooses is the model.
+func claudeCodeCommand(ai *AIConfig) string {
+	command := "claude -p - --permission-mode acceptEdits"
+	if ai != nil && reModel.MatchString(ai.Model) {
+		command += " --model " + ai.Model
+	}
+	return command
 }
 
 // Name is "exec".
