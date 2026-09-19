@@ -252,6 +252,9 @@ func (w *worker) execute(ctx context.Context, item queue.Item) {
 	}
 	active.By = "trilha-runner worker " + w.Name
 	active.Access = item.AI
+	// The control plane answers for a dependency in another project, so a
+	// worker honours one without a checkout of it.
+	active.Store.Remote = w.Queue
 	bundle, bundleErr := w.Queue.Bundle(ctx, item)
 	if bundleErr == nil {
 		active, bundleErr = w.materialize(ctx, item, bundle)
@@ -299,6 +302,7 @@ func (w *worker) materialize(ctx context.Context, item queue.Item, bundle queue.
 	}
 	active.By = "trilha-runner worker " + w.Name
 	active.Access = item.AI
+	active.Store.Remote = w.Queue
 	return active, nil
 }
 

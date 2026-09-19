@@ -138,7 +138,7 @@ func TestDockerPreparesServicesThenTheAgentContainer(t *testing.T) {
 		"--volume " + worktree + ":/workspace", "--workdir /workspace",
 		"--read-only", "--tmpfs /tmp:rw,size=256m",
 		"--security-opt no-new-privileges", "--cap-drop ALL",
-		"--pids-limit 512", "--memory 4g", "--cpus 2",
+		"--pids-limit 256", "--memory 1g", "--cpus 1",
 		"--entrypoint sleep",
 	} {
 		if !strings.Contains(agentCall, want) {

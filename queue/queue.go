@@ -7,9 +7,9 @@ package queue
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/emersonjoe/trilha-runner/driver"
-	"github.com/emersonjoe/trilha-spec/spec"
 	"github.com/emersonjoe/trilha-spec/task"
 )
 
@@ -159,26 +159,19 @@ type Queue interface {
 	Done(ctx context.Context, item Item, res Result) error
 }
 
-// Local is the dependency graph of the store: the first ready task with
-// every dependency done. When a Resolver is set, a dependency in another
-// repository counts too — a task that waits for `trilha:TASK-004` is not
-// offered until that task is done, and the reason is visible rather than a
-// silent skip.
-type Local struct {
-	Store *task.Store
-	// Resolver answers the status of a cross-repository dependency. Without
-	// one, a task that has any is left alone: the runner does not assume a
-	// dependency it cannot see is done.
-	Resolver Resolver
-	// By is recorded as the author of the evidence a block leaves.
-	By string
-}
+// Local is the dependency graph of the store: the first ready task with every
+// dependency done. Dependencies in other repositories count too — a task that
+// waits for `trilha:TASK-004` is not offered until that task is done — and who
+// answers for an alias is the store's `Remote`, so `next` and the run that
+// follows it cannot disagree about whether a task may start.
+type Local struct{ Store *task.Store }
 
 // Waiting is one task the queue did not offer, and why.
 type Waiting struct {
 	Task string `json:"task"`
-	// Reason is `waiting:<alias>:TASK-NNN` for a dependency that is not done,
-	// with what went wrong appended when it could not be resolved at all.
+	// Reason names each dependency that is not done, as the protocol writes
+	// it: `trilha:TASK-004` for one that is open, `waiting:trilha:TASK-004`
+	// for one nobody could answer for.
 	Reason string `json:"reason"`
 }
 
@@ -197,141 +190,41 @@ func (l Local) NextWaiting(ctx context.Context) (Item, []Waiting, error) {
 	if err != nil {
 		return Item{}, nil, err
 	}
-	// The protocol's graph reasons about this repository; a dependency in
-	// another one is resolved beside it.
-	g, err := task.NewGraph(localized(tasks))
+	g, err := l.Store.Graph()
 	if err != nil {
 		return Item{}, nil, err
 	}
-	var waiting []Waiting
-	for _, t := range candidates(g, tasks) {
-		reason, err := l.blockedBy(ctx, t)
-		if err != nil {
-			return Item{}, waiting, err
-		}
-		if reason != "" {
-			waiting = append(waiting, Waiting{Task: t.ID, Reason: reason})
-			if err := l.block(t, reason); err != nil {
-				return Item{}, waiting, err
-			}
-			continue
-		}
-		if t.Status == task.Blocked {
-			// Everything it waited for is done: the runner unblocks what the
-			// runner blocked, so the agenda never strands on its own.
-			if _, err := l.Store.Move(t.ID, task.Ready); err != nil {
-				return Item{}, waiting, err
-			}
-			l.note(t.ID, "unblocked: every cross-repository dependency is done")
-		}
-		return Item{TaskID: t.ID}, waiting, nil
+	if t := g.Next(); t != nil {
+		return Item{TaskID: t.ID}, waitingOn(g, tasks), nil
 	}
-	return Item{}, waiting, ErrEmpty
+	return Item{}, waitingOn(g, tasks), ErrEmpty
 }
 
-// Waiting answers every task held back by a cross-repository dependency.
+// Waiting answers every ready task held back by a dependency.
 func (l Local) Waiting(ctx context.Context) ([]Waiting, error) {
-	_, waiting, err := l.NextWaiting(ctx)
-	if err != nil && !errors.Is(err, ErrEmpty) {
-		return waiting, err
+	tasks, err := l.Store.List()
+	if err != nil {
+		return nil, err
 	}
-	return waiting, nil
+	g, err := l.Store.Graph()
+	if err != nil {
+		return nil, err
+	}
+	return waitingOn(g, tasks), nil
 }
 
-// candidates are the tasks the local graph says could run now — ready with
-// every local dependency done — plus the ones this queue blocked earlier and
-// may now be able to release.
-func candidates(g *task.Graph, tasks []*task.Task) []*task.Task {
-	ready := g.Ready()
-	byID := make(map[string]bool, len(ready))
-	out := make([]*task.Task, 0, len(ready))
-	for _, t := range ready {
-		byID[t.ID] = true
-		out = append(out, t)
-	}
+// waitingOn reports the ready tasks the graph would not offer. Only ready
+// ones: a task that is still an idea is not waiting on anything, it is
+// unwritten.
+func waitingOn(g *task.Graph, tasks []*task.Task) []Waiting {
+	var out []Waiting
 	for _, t := range tasks {
-		if t.Status != task.Blocked || byID[t.ID] || len(RemoteDependencies(t)) == 0 {
+		if t.Status != task.Ready {
 			continue
 		}
-		if len(g.Blockers(t.ID)) == 0 {
-			out = append(out, t)
+		if open := g.Blockers(t.ID); len(open) > 0 {
+			out = append(out, Waiting{Task: t.ID, Reason: strings.Join(open, ", ")})
 		}
-	}
-	return out
-}
-
-// blockedBy answers why a task cannot run, or "" when nothing holds it.
-func (l Local) blockedBy(ctx context.Context, t *task.Task) (string, error) {
-	deps := RemoteDependencies(t)
-	if len(deps) == 0 {
-		return "", nil
-	}
-	if l.Resolver == nil {
-		return "waiting:" + deps[0].String() + " (no resolver: pass --repo " + deps[0].Alias + "=<path>)", nil
-	}
-	for _, dep := range deps {
-		status, err := l.Resolver.Status(ctx, dep)
-		if err != nil {
-			return "waiting:" + dep.String() + " (" + err.Error() + ")", nil
-		}
-		if status != task.Done {
-			return "waiting:" + dep.String() + " (" + string(status) + ")", nil
-		}
-	}
-	return "", nil
-}
-
-// block moves a ready task out of the way and records why. A task already
-// blocked stays put; the note is only written when the reason changes, so a
-// poll every ten seconds does not fill the evidence directory.
-func (l Local) block(t *task.Task, reason string) error {
-	if t.Status == task.Blocked {
-		if last, _ := lastWaiting(l.Store.Layout, t.ID); last == reason {
-			return nil
-		}
-		l.note(t.ID, reason)
-		return nil
-	}
-	if _, err := l.Store.Move(t.ID, task.Blocked); err != nil {
-		return err
-	}
-	l.note(t.ID, reason)
-	return nil
-}
-
-func (l Local) note(id, reason string) {
-	by := l.By
-	if by == "" {
-		by = "trilha-runner queue"
-	}
-	task.Record(l.Store.Layout, task.Evidence{
-		Task: id, Kind: "note", By: by, Note: reason,
-		Meta: map[string]string{"queue": "cross-repository", "waiting": reason},
-	})
-}
-
-// lastWaiting answers the reason the queue recorded last for a task.
-func lastWaiting(layout spec.Layout, id string) (string, bool) {
-	records, err := task.ListEvidence(layout, id)
-	if err != nil {
-		return "", false
-	}
-	for i := len(records) - 1; i >= 0; i-- {
-		if r := records[i]; r.Meta["queue"] == "cross-repository" {
-			return r.Meta["waiting"], true
-		}
-	}
-	return "", false
-}
-
-// localized copies the tasks with only the dependencies this repository can
-// resolve, so the protocol's graph is not asked about another repository.
-func localized(tasks []*task.Task) []*task.Task {
-	out := make([]*task.Task, 0, len(tasks))
-	for _, t := range tasks {
-		copied := *t
-		copied.DependsOn = LocalDependencies(t)
-		out = append(out, &copied)
 	}
 	return out
 }

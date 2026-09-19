@@ -14,65 +14,29 @@ import (
 	"github.com/emersonjoe/trilha-spec/task"
 )
 
-func TestScanMetricsIgnoresOrdinaryOutput(t *testing.T) {
-	out := `running the harness
-{"metric":"triage_top1","value":0.87,"threshold":0.85,"comparator":">="}
-{"not":"a metric"}
-[1,2,3]
-{"metric":"p95_latency_ms","value":410,"threshold":300,"comparator":"<=","unit":"ms"}
-{"metric":"no comparator","value":1,"threshold":0}
-done
-`
-	got := ScanMetrics(out)
-	if len(got) != 2 {
-		t.Fatalf("scanned %d metrics: %+v", len(got), got)
-	}
-	if got[0].Metric != "triage_top1" || !got[0].OK() {
-		t.Fatalf("first = %+v", got[0])
-	}
-	if got[1].Metric != "p95_latency_ms" || got[1].OK() || got[1].Unit != "ms" {
-		t.Fatalf("second = %+v", got[1])
-	}
-	if got[0].String() != "triage_top1=0.87 >= 0.85" {
-		t.Fatalf("string = %q", got[0].String())
-	}
-}
-
-func TestMetricComparators(t *testing.T) {
-	for _, c := range []struct {
-		comparator string
-		value      float64
-		threshold  float64
-		want       bool
-	}{
-		{">=", 1, 1, true}, {">=", 0.9, 1, false},
-		{"<=", 1, 1, true}, {"<=", 1.1, 1, false},
-		{">", 1, 1, false}, {">", 2, 1, true},
-		{"<", 1, 1, false}, {"<", 0, 1, true},
-		{"==", 1, 1, true}, {"==", 2, 1, false},
-		{"!=", 2, 1, true}, {"!=", 1, 1, false},
-		{"~=", 1, 1, false},
-	} {
-		m := Metric{Comparator: c.comparator, Value: c.value, Threshold: c.threshold}
-		if m.OK() != c.want {
-			t.Errorf("%v %s %v = %v, want %v", c.value, c.comparator, c.threshold, m.OK(), c.want)
+// metrics answers a result's eval records, which the protocol writes while the
+// checks run.
+func metrics(res *Result) []task.Evidence {
+	var out []task.Evidence
+	for _, e := range res.Evidence {
+		if e.Kind == task.KindEval {
+			out = append(out, e)
 		}
 	}
+	return out
 }
 
-// A harness prints two metrics, one below its threshold: every command exits
-// 0 and the task still fails, with one `eval` record per metric.
+// A harness prints two metrics, one below its threshold: every command exits 0
+// and the task still fails, with one `eval` record per metric and the numbers
+// in the run record's summary.
 func TestEvalMetricBelowThresholdFailsTheRun(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses sh")
 	}
 	dir := repo(t)
-	os.MkdirAll(filepath.Join(dir, "eval/golden"), 0o755)
-	os.WriteFile(filepath.Join(dir, "eval/golden/manifest.json"), []byte(`{"cases":42}`), 0o644)
-	harness := filepath.Join(dir, "harness.sh")
-	os.WriteFile(harness, []byte(`#!/bin/sh
+	os.WriteFile(filepath.Join(dir, "harness.sh"), []byte(`#!/bin/sh
 echo "harness: 42 cases"
-echo '{"metric":"triage_top1","value":0.87,"threshold":0.85,"comparator":">=","dataset":{"id":"triage-v3","manifest":"eval/golden/manifest.json"}}'
+echo '{"metric":"triage_top1","value":0.87,"threshold":0.85,"comparator":">=","dataset":{"id":"triage-v3","sha256":"c0ffee"}}'
 echo '{"metric":"p95_latency_ms","value":410,"threshold":300,"comparator":"<=","unit":"ms"}'
 exit 0
 `), 0o755)
@@ -82,7 +46,7 @@ exit 0
 	r.Driver = driver.Echo{}
 	tk, _ := r.Store.Create("Quality harness", func(x *task.Task) {
 		x.Status = task.Ready
-		x.Acceptance = []string{"triage stays above 0.85"}
+		x.Acceptance = []string{"metric: triage_top1 >= 0.85"}
 		x.Checks = []string{"sh harness.sh"}
 	})
 	res, err := r.Run(context.Background(), tk.ID)
@@ -92,23 +56,21 @@ exit 0
 	if res.Passed || res.Status != task.Failed {
 		t.Fatalf("res = %+v", res)
 	}
-	var evals []task.Evidence
-	for _, e := range res.Evidence {
-		if e.Kind == "eval" {
-			evals = append(evals, e)
-		}
-	}
+	evals := metrics(res)
 	if len(evals) != 2 {
 		t.Fatalf("got %d eval records of %d evidence", len(evals), len(res.Evidence))
 	}
-	if !evals[0].Passed || evals[0].Meta["metric"] != "triage_top1" || evals[0].Meta["comparator"] != ">=" {
+	if !evals[0].Passed || evals[0].Metric != "triage_top1" || evals[0].Comparator != ">=" {
 		t.Fatalf("first eval = %+v", evals[0])
 	}
-	// The manifest is hashed; the data never is.
-	if evals[0].Meta["dataset"] != "triage-v3" || len(evals[0].Meta["dataset_sha256"]) != 64 {
-		t.Fatalf("dataset evidence = %+v", evals[0].Meta)
+	// The value and the threshold are fields of the record, not prose in it.
+	if evals[0].Value == nil || *evals[0].Value != 0.87 || evals[0].Threshold == nil || *evals[0].Threshold != 0.85 {
+		t.Fatalf("first eval numbers = %+v", evals[0])
 	}
-	if evals[1].Passed || evals[1].Meta["metric"] != "p95_latency_ms" || evals[1].Meta["unit"] != "ms" {
+	if evals[0].Dataset == nil || evals[0].Dataset.ID != "triage-v3" || evals[0].Dataset.SHA256 != "c0ffee" {
+		t.Fatalf("dataset = %+v", evals[0].Dataset)
+	}
+	if evals[1].Passed || evals[1].Metric != "p95_latency_ms" || evals[1].Unit != "ms" {
 		t.Fatalf("second eval = %+v", evals[1])
 	}
 	// The check itself passed: the exit code says the harness ran.
@@ -122,22 +84,22 @@ exit 0
 	if run.Kind != "run" || run.Passed {
 		t.Fatalf("run record = %+v", run)
 	}
-	want := "triage_top1=0.87 >= 0.85 pass; p95_latency_ms=410 <= 300 fail"
+	want := "p95_latency_ms 410 ms <= 300 fail; triage_top1 0.87 >= 0.85 on triage-v3 pass"
 	if run.Meta["metrics"] != want {
 		t.Fatalf("metrics = %q, want %q", run.Meta["metrics"], want)
 	}
 }
 
-// A metric that is met leaves the run passing, and a manifest the harness
-// names but does not ship is reported as unreadable rather than silently
-// dropped.
-func TestEvalMetricMetPassesAndReportsMissingManifest(t *testing.T) {
+// A metric that is met leaves the run passing, and one with no threshold is a
+// measurement rather than a gate: it is recorded and it does not fail anything.
+func TestEvalMetricMetAndMeasurementWithoutAGate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses sh")
 	}
 	dir := repo(t)
 	os.WriteFile(filepath.Join(dir, "harness.sh"), []byte(`#!/bin/sh
-echo '{"metric":"a11y_violations","value":0,"threshold":0,"comparator":"==","dataset":{"id":"pages","manifest":"eval/missing.json"}}'
+echo '{"metric":"a11y_violations","value":0,"threshold":0,"comparator":"=="}'
+echo '{"metric":"pages_scanned","value":137}'
 `), 0o755)
 	commit(t, dir)
 
@@ -145,26 +107,24 @@ echo '{"metric":"a11y_violations","value":0,"threshold":0,"comparator":"==","dat
 	r.Driver = driver.Echo{}
 	tk, _ := r.Store.Create("Accessibility", func(x *task.Task) {
 		x.Status = task.Ready
-		x.Acceptance = []string{"no violations"}
+		x.Acceptance = []string{"metric: a11y_violations == 0"}
 		x.Checks = []string{"sh harness.sh"}
 	})
 	res, err := r.Run(context.Background(), tk.ID)
 	if err != nil || !res.Passed || res.Status != task.Review {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
-	for _, e := range res.Evidence {
-		if e.Kind != "eval" {
-			continue
-		}
-		if !e.Passed {
-			t.Fatalf("eval = %+v", e)
-		}
-		if got := e.Meta["dataset_sha256"]; got == "" || len(got) == 64 {
-			t.Fatalf("missing manifest should say so, got %q", got)
-		}
-		return
+	evals := metrics(res)
+	if len(evals) != 2 {
+		t.Fatalf("got %d eval records", len(evals))
 	}
-	t.Fatal("no eval record")
+	// Zero is a number a gate cares about: it must not be read as "no value".
+	if evals[0].Value == nil || *evals[0].Value != 0 || !evals[0].Passed {
+		t.Fatalf("a11y_violations = %+v", evals[0])
+	}
+	if evals[1].Threshold != nil || !evals[1].Passed {
+		t.Fatalf("a metric with no threshold is a measurement: %+v", evals[1])
+	}
 }
 
 // Residency is enforced by the runner too: a refusal is a `run` record with
@@ -269,5 +229,38 @@ func TestChecksRunInsideTheSandbox(t *testing.T) {
 	r.Sandbox = sandbox.None{}
 	if res, err := r.Run(context.Background(), tk.ID); err == nil || res.Passed {
 		t.Fatalf("%+v %v", res, err)
+	}
+}
+
+// The sandboxed path records metrics the same way the protocol's own does: a
+// gate missed inside the container fails the task just as it would outside.
+func TestMetricsInsideTheSandbox(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	dir := repo(t)
+	os.WriteFile(filepath.Join(dir, "harness.sh"), []byte(`#!/bin/sh
+echo '{"metric":"triage_top1","value":0.10,"threshold":0.85,"comparator":">="}'
+`), 0o755)
+	commit(t, dir)
+	r, _ := New(dir)
+	r.Driver = driver.Echo{}
+	r.Sandbox = &wrapping{prefix: []string{"env", "TRILHA_INSIDE=1"}}
+	tk, _ := r.Store.Create("Sandboxed harness", func(x *task.Task) {
+		x.Status = task.Ready
+		x.Acceptance = []string{"metric: triage_top1 >= 0.85"}
+		x.Checks = []string{"sh harness.sh"}
+	})
+	res, err := r.Run(context.Background(), tk.ID)
+	if err == nil || res.Passed || res.Status != task.Failed {
+		t.Fatalf("%+v %v", res, err)
+	}
+	evals := metrics(res)
+	if len(evals) != 1 || evals[0].Passed || evals[0].Metric != "triage_top1" {
+		t.Fatalf("evals = %+v", evals)
+	}
+	// The record says where it ran, wrapping and all.
+	if !strings.HasPrefix(evals[0].Command, "env TRILHA_INSIDE=1 ") {
+		t.Fatalf("eval command = %q", evals[0].Command)
 	}
 }

@@ -194,21 +194,12 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 		return fail("verify", err)
 	}
 	res.Evidence = v.Evidence
-	evals, err := r.recordEvals(v, id, env.Dir)
-	if err != nil {
-		return fail("verify", err)
-	}
-	res.Evidence = append(res.Evidence, evals...)
-	// A metric that misses its threshold fails the verification even when
-	// every command exited 0.
+	// v.Passed already accounts for the metrics the checks printed: the
+	// protocol records an `eval` per metric line and a missed gate fails the
+	// verification even when every command exited 0.
 	res.Passed = v.Passed
-	for _, e := range evals {
-		if !e.Passed {
-			res.Passed = false
-		}
-	}
 	meta := map[string]string{"driver": drv.Name(), "branch": wt.Branch, "commit": sha, "elapsed": time.Since(start).Round(time.Millisecond).String()}
-	if s := summarize(evals); s != "" {
+	if s := summarize(v.Evidence); s != "" {
 		meta["metrics"] = s
 	}
 	for k, val := range out.Meta {
@@ -232,7 +223,7 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	}
 	res.Status = to
 	res.Elapsed = time.Since(start)
-	r.logf("%s is now %s (%d checks, %d metrics, passed=%v)", id, to, len(v.Evidence), len(evals), res.Passed)
+	r.logf("%s is now %s (%d records, passed=%v)", id, to, len(v.Evidence), res.Passed)
 	if !res.Passed {
 		return res, errors.New("verification failed")
 	}
@@ -250,11 +241,15 @@ func (r *Runner) access() []string {
 	return env
 }
 
-// verify runs the task's checks — then the project's — where the sandbox
-// says, and records one evidence per check. Without a sandbox that moves the
-// work, this is the protocol's own RunChecks, unchanged. With one, each
-// command is wrapped so it runs inside, and the evidence records the wrapped
-// line: what ran is what the record says.
+// verify runs the task's checks — then the project's — where the sandbox says.
+//
+// Without a sandbox that moves the work this is the protocol's own RunChecks,
+// which already records one `check` per command and one `eval` per metric line
+// the command printed. With one, the loop is here because each command has to
+// be wrapped to run inside, and the evidence keeps the wrapped line: what ran
+// is what the record says. Every decision inside it is still the protocol's —
+// RunCheck, ParseMetricLine, Eval, Record — so the two paths cannot drift on
+// anything but the wrapping.
 func (r *Runner) verify(ctx context.Context, t *task.Task, env sandbox.Env) (*task.Verification, error) {
 	if !env.Inside() {
 		return task.RunChecks(ctx, r.Layout, t, env.Dir, r.By)
@@ -265,6 +260,12 @@ func (r *Runner) verify(ctx context.Context, t *task.Task, env sandbox.Env) (*ta
 	}
 	commands := append(append([]string(nil), t.Checks...), proj.Verify...)
 	v := &task.Verification{Task: t.ID, Passed: true}
+	keep := func(e task.Evidence, p string) {
+		v.Evidence, v.Paths = append(v.Evidence, e), append(v.Paths, p)
+		if !e.Passed {
+			v.Passed = false
+		}
+	}
 	if len(commands) == 0 {
 		v.Passed = false
 		e, p, err := task.Record(r.Layout, task.Evidence{Task: t.ID, Kind: "note", By: r.By, Dir: env.WorkDir,
@@ -276,16 +277,47 @@ func (r *Runner) verify(ctx context.Context, t *task.Task, env sandbox.Env) (*ta
 		return v, nil
 	}
 	for _, c := range commands {
-		e, p, err := task.Record(r.Layout, task.RunCheck(ctx, t.ID, env.Wrap(c), env.Dir, r.By))
+		check := task.RunCheck(ctx, t.ID, env.Wrap(c), env.Dir, r.By)
+		output := check.Output
+		e, p, err := task.Record(r.Layout, check)
 		if err != nil {
 			return nil, err
 		}
-		v.Evidence, v.Paths = append(v.Evidence, e), append(v.Paths, p)
-		if !e.Passed {
-			v.Passed = false
+		keep(e, p)
+		for _, line := range strings.Split(output, "\n") {
+			m, why, ok := task.ParseMetricLine(line)
+			if !ok {
+				continue
+			}
+			ev := task.Eval(t.ID, r.By, m)
+			ev.Command, ev.Dir = env.Wrap(c), env.Dir
+			if why != "" {
+				ev.Note, ev.Passed = why, false
+			}
+			ev, p, err := task.Record(r.Layout, ev)
+			if err != nil {
+				return nil, err
+			}
+			keep(ev, p)
+			r.logf("eval %s (passed=%v)", m, ev.Passed)
 		}
 	}
 	return v, nil
+}
+
+// summarize renders the metrics for the run record's meta, so the summary a
+// reviewer reads first already carries the numbers.
+func summarize(records []task.Evidence) string {
+	metrics := task.Metrics(records)
+	parts := make([]string, 0, len(metrics))
+	for _, m := range metrics {
+		mark := "fail"
+		if m.Passed {
+			mark = "pass"
+		}
+		parts = append(parts, m.String()+" "+mark)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // Next runs the first executable task, or answers ErrNothing.

@@ -98,17 +98,24 @@ func TestNextAcrossRepositories(t *testing.T) {
 	product := t.TempDir()
 	repo(product, map[string]string{
 		"TASK-005": "---\nid: TASK-005\ntitle: Product work\nstatus: ready\nacceptance:\n  - it works\n" +
-			"checks:\n  - \"sh -c \\\"test -f TRILHA_RUN.md\\\"\"\ndepends_on_remote:\n  - trilha:TASK-004\n---\n",
+			"checks:\n  - \"sh -c \\\"test -f TRILHA_RUN.md\\\"\"\ndepends_on:\n  - trilha:TASK-004\n---\n",
 	})
 
-	// Held: the framework task is not done.
+	// Held, with the dependency named: the framework task is not done.
 	held := exec.Command(bin, "next", "--driver", "echo", "--repo", "trilha="+framework)
 	held.Dir = product
 	out, err := held.CombinedOutput()
 	if err == nil {
 		t.Fatalf("the task ran despite its cross-repository dependency:\n%s", out)
 	}
-	if !strings.Contains(string(out), "waiting:trilha:TASK-004") {
+	if !strings.Contains(string(out), "TASK-005: trilha:TASK-004") {
+		t.Fatalf("out:\n%s", out)
+	}
+	// Without --repo nobody can answer for the alias, which reads differently
+	// from a dependency that is merely open.
+	unresolved := exec.Command(bin, "next", "--driver", "echo")
+	unresolved.Dir = product
+	if out, err := unresolved.CombinedOutput(); err == nil || !strings.Contains(string(out), "waiting:trilha:TASK-004") {
 		t.Fatalf("out:\n%s", out)
 	}
 

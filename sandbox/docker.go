@@ -138,7 +138,7 @@ type Limits struct {
 
 // DefaultLimits are what a run gets unless the operator changed them for the
 // whole worker.
-var DefaultLimits = Limits{CPUs: "2", Memory: "4g", PIDs: 512}
+var DefaultLimits = Limits{CPUs: "1", Memory: "1g", PIDs: 256}
 
 // WorkDir is where the worktree is mounted inside the containers.
 const WorkDir = "/workspace"

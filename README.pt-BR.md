@@ -80,8 +80,9 @@ nessa rede, onde um serviço responde pelo nome.
 
 - O worktree é o único caminho gravável que sobrevive: o sistema de arquivos raiz é somente
   leitura e `/tmp` é um tmpfs que morre com o container.
-- Os limites são do runner, não do manifesto — cpus, memória, pids, `no-new-privileges`,
-  `cap-drop ALL` — porque uma declaração que levanta o próprio teto não limita nada.
+- Os limites são do runner, não do manifesto — uma CPU, 1 GiB de memória, 256 PIDs,
+  `no-new-privileges`, `cap-drop ALL` — porque uma declaração que levanta o próprio teto não
+  limita nada.
 - O agente não é root: roda como o usuário dono do worktree. Com todas as capabilities
   derrubadas não existe `CAP_DAC_OVERRIDE` de reserva, então é isso que torna o worktree
   gravável e todo o resto não.
@@ -93,34 +94,38 @@ nessa rede, onde um serviço responde pelo nome.
 
 ## Dependências entre repositórios
 
-Uma task de um repositório de produto pode esperar por uma task de outro. O `next` resolve os
-aliases que o operador nomeia e não oferece uma task cuja dependência ainda está aberta:
-
-```bash
-trilha-runner next --repo trilha=../trilha --repo cloud=../trilha-cloud
-# · TASK-005: waiting:trilha:TASK-004 (running)
-```
-
-A task é reportada como `blocked` com esse motivo em evidência, e a própria fila a devolve para
-`ready` assim que todas estiverem `done` — uma agenda nunca fica presa num bloqueio que o
-runner mesmo colocou. Uma dependência que não pode ser resolvida também bloqueia: o runner não
-lê como pronto o que não consegue ver. O `queue.Remote` resolve a mesma dependência contra o
-control plane com `GET /api/projects/{alias}/tasks/{id}`, onde um 404 bloqueia em vez de passar.
-
-Enquanto o protocolo não aceita um alias dentro de `depends_on`
-([trilha-spec #11](https://github.com/emersonjoe/trilha-spec/issues/11)), a task as declara em
-`depends_on_remote`, que o protocolo mantém intacto como campo desconhecido. As duas grafias
-são lidas.
+Uma task de um repositório de produto pode esperar por uma task de outro. O protocolo escreve
+isso com o alias na frente, mantém a dependência fora da ordem deste repositório e recusa
+iniciar uma task cujo alias ninguém respondeu:
 
 ```markdown
 ---
 id: TASK-005
 title: Importar do framework
 status: ready
-depends_on_remote:
-  - trilha:TASK-004
+depends_on:
+  - TASK-004          # este repositório
+  - trilha:TASK-004   # outro
 ---
 ```
+
+O que o protocolo não decide é o que um alias *significa* — isso é assunto de máquina, não de
+documento. Quem diz é o `--repo`:
+
+```bash
+trilha-runner next --repo trilha=../trilha --repo cloud=../trilha-cloud
+# · TASK-005: trilha:TASK-004
+```
+
+A task não é oferecida enquanto a dependência está aberta, e o motivo a nomeia. Uma dependência
+que ninguém conseguiu responder aparece diferente — `waiting:trilha:TASK-004` — porque
+dependência que não se consegue ver não é dependência cumprida; o runner nunca a lê como pronta.
+O resolvedor fica na store, então o `next` e a execução que vem depois dele não podem discordar
+sobre uma task poder começar.
+
+Um worker conectado ao Cloud resolve a mesma dependência contra o control plane
+(`GET /api/projects/{alias}/tasks/{id}`) em vez de contra um caminho, então ele não precisa de
+checkout do outro projeto.
 
 ## Evidência
 
@@ -149,17 +154,32 @@ registro `check` que a carregou:
 {"metric":"p95_latency_ms","value":410,"threshold":300,"comparator":"<=","unit":"ms"}
 ```
 
-Os comparadores são `>=`, `<=`, `>`, `<`, `==` e `!=`. **Um comparador não satisfeito reprova a
-verificação mesmo que todos os comandos tenham saído com 0**, então a task vai para `failed` e
-o resumo do registro `run` lista as métricas. O `dataset` opcional diz contra o que se mediu; o
-runner faz o hash do manifesto que ele nomeia, nunca dos dados:
+Os comparadores são `>=`, `<=` e `==` — um gate é "pelo menos", "no máximo" ou "exatamente", e
+qualquer coisa mais fina é teste estatístico, não gate. **Um comparador não satisfeito reprova a
+verificação mesmo que todos os comandos tenham saído com 0**, então a task vai para `failed` e o
+resumo do registro `run` lista as métricas. Uma métrica sem limiar é medição, não gate: fica
+registrada para ser acompanhada e não reprova nada.
+
+O `dataset` opcional diz contra o que se mediu. Ele carrega o hash do *manifesto* do conjunto,
+nunca do conteúdo — um conjunto dourado guarda casos reais, e casos reais guardam dados
+pessoais:
 
 ```json
 {"metric":"triage_top1","value":0.87,"threshold":0.85,"comparator":">=",
- "dataset":{"id":"triage-v3","manifest":"eval/golden/manifest.json"}}
+ "dataset":{"id":"triage-v3","sha256":"9f86d081…"}}
 ```
 
-Qualquer outra linha que um check imprima é saída comum e é ignorada.
+Qualquer outra linha que um check imprima é saída comum e é ignorada. A varredura, os registros
+e o gate são do protocolo (`task.RunChecks`); o que o runner acrescenta é rodá-los onde o
+sandbox manda e colocar os números no resumo do registro `run`.
+
+A task também pode declarar o gate como critério de aceitação, e aí o `trilha spec doctor`
+confere se ele foi realmente evidenciado:
+
+```markdown
+acceptance:
+  - "metric: triage_top1 >= 0.85"
+```
 
 ## Worker: a ponte para o trilha-cloud
 
@@ -238,10 +258,10 @@ meio, então ele declara essa sequência em vez de escondê-la num script embrul
 
 | Pacote | O que é |
 |---|---|
-| `runner` | o pipeline: `Runner.Run`, `Runner.Next`; métricas `eval` da saída dos checks |
+| `runner` | o pipeline: `Runner.Run`, `Runner.Next` |
 | `driver` | `exec`, `claude-code`, `ai`, `echo`; `driver.Register` para o seu; `Access` para credenciais por projeto e residência |
 | `worktree` | worktrees git por task, commit, diff stat |
-| `queue` | `Local` (o grafo, com dependências entre repositórios) e `Remote` (cliente do trilha-cloud) |
+| `queue` | `Local` (o grafo) e `Remote` (cliente do trilha-cloud); `Checkouts` resolve um alias de repositório |
 | `sandbox` | `None` roda no worktree; `Docker` roda o agente e os checks num container com serviços |
 | `cmd/trilha-runner` | a CLI |
 

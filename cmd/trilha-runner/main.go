@@ -205,6 +205,9 @@ func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error
 		if len(pos) != 1 {
 			return errors.New("usage: trilha-runner run <task-id>")
 		}
+		if err := resolveRepos(r, repos); err != nil {
+			return err
+		}
 		res, err = r.Run(ctx, pos[0])
 	} else {
 		var id string
@@ -227,19 +230,10 @@ func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error
 // checkouts — in the others. What it passed over is printed, so an agenda
 // that is waiting says what for instead of "nothing to run".
 func nextTask(ctx context.Context, r *runner.Runner, repos []string, out io.Writer) (string, error) {
-	q := queue.Local{Store: r.Store, By: "trilha-runner next"}
-	if len(repos) > 0 {
-		checkouts := queue.Checkouts{}
-		for _, value := range repos {
-			alias, dir, err := queue.ParseRepo(value)
-			if err != nil {
-				return "", err
-			}
-			checkouts[alias] = dir
-		}
-		q.Resolver = checkouts
+	if err := resolveRepos(r, repos); err != nil {
+		return "", err
 	}
-	item, waiting, err := q.NextWaiting(ctx)
+	item, waiting, err := queue.Local{Store: r.Store}.NextWaiting(ctx)
 	for _, w := range waiting {
 		fmt.Fprintf(out, "· %s\n", w)
 	}
@@ -250,6 +244,24 @@ func nextTask(ctx context.Context, r *runner.Runner, repos []string, out io.Writ
 		return "", err
 	}
 	return item.TaskID, nil
+}
+
+// resolveRepos tells the store who answers for an alias, so `next` and the run
+// that follows it agree about whether a task may start.
+func resolveRepos(r *runner.Runner, repos []string) error {
+	if len(repos) == 0 {
+		return nil
+	}
+	checkouts := queue.Checkouts{}
+	for _, value := range repos {
+		alias, dir, err := queue.ParseRepo(value)
+		if err != nil {
+			return err
+		}
+		checkouts[alias] = dir
+	}
+	r.Store.Remote = checkouts
+	return nil
 }
 
 func printResult(out io.Writer, res *runner.Result) {

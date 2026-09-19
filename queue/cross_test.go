@@ -15,18 +15,6 @@ import (
 	"github.com/emersonjoe/trilha-spec/task"
 )
 
-func TestParseDependency(t *testing.T) {
-	d, ok := ParseDependency(" trilha:TASK-004 ")
-	if !ok || d.Alias != "trilha" || d.Task != "TASK-004" || d.String() != "trilha:TASK-004" {
-		t.Fatalf("%+v %v", d, ok)
-	}
-	for _, bad := range []string{"TASK-004", "", ":TASK-004", "trilha:", "trilha:nope", "trilha:task-4"} {
-		if _, ok := ParseDependency(bad); ok {
-			t.Errorf("%q accepted", bad)
-		}
-	}
-}
-
 func TestParseRepo(t *testing.T) {
 	alias, dir, err := ParseRepo("trilha=../trilha")
 	if err != nil || alias != "trilha" || dir != "../trilha" {
@@ -55,11 +43,13 @@ func checkout(t *testing.T, tasks map[string]string) *task.Store {
 	return &task.Store{Layout: layout}
 }
 
-func ready(id, title string, remote ...string) string {
+// ready writes a ready task whose dependencies may name another repository,
+// the way the protocol spells it: `depends_on: [trilha:TASK-004]`.
+func ready(id, title string, deps ...string) string {
 	body := "---\nid: " + id + "\ntitle: " + title + "\nstatus: ready\nacceptance:\n  - it works\n"
-	if len(remote) > 0 {
-		body += RemoteField + ":\n"
-		for _, d := range remote {
+	if len(deps) > 0 {
+		body += "depends_on:\n"
+		for _, d := range deps {
 			body += "  - " + d + "\n"
 		}
 	}
@@ -76,95 +66,85 @@ func finish(t *testing.T, store *task.Store, id string) {
 	}
 }
 
-func done(id, title string) string {
-	return "---\nid: " + id + "\ntitle: " + title + "\nstatus: done\n---\n"
+// A task file that names another repository parses and keeps the alias: the
+// protocol accepts it, so the runner needs no field of its own.
+func TestProtocolAcceptsAnAliasInDependsOn(t *testing.T) {
+	tk, err := task.Parse([]byte(ready("TASK-005", "Product work", "trilha:TASK-004")))
+	if err != nil {
+		t.Fatalf("the protocol refused the alias: %v", err)
+	}
+	if len(tk.DependsOn) != 1 || tk.DependsOn[0] != "trilha:TASK-004" {
+		t.Fatalf("depends_on = %v", tk.DependsOn)
+	}
 }
 
-// A task waiting on another repository is not offered, and the reason says
-// which dependency and where it stands.
+// A task waiting on another repository is not offered, and the reason names
+// the dependency. Once it is done, the same queue offers the task.
 func TestLocalHoldsACrossRepositoryDependency(t *testing.T) {
 	framework := checkout(t, map[string]string{"TASK-004": ready("TASK-004", "Framework work")})
 	product := checkout(t, map[string]string{"TASK-005": ready("TASK-005", "Product work", "trilha:TASK-004")})
 
-	q := Local{Store: product, Resolver: Checkouts{"trilha": framework.Layout.Root}}
+	product.Remote = Checkouts{"trilha": framework.Layout.Root}
+	q := Local{Store: product}
 	item, waiting, err := q.NextWaiting(context.Background())
 	if !errors.Is(err, ErrEmpty) {
 		t.Fatalf("%+v %v", item, err)
 	}
-	if len(waiting) != 1 || waiting[0].Task != "TASK-005" {
+	if len(waiting) != 1 || waiting[0].Task != "TASK-005" || waiting[0].Reason != "trilha:TASK-004" {
 		t.Fatalf("waiting = %+v", waiting)
 	}
-	if !strings.HasPrefix(waiting[0].Reason, "waiting:trilha:TASK-004") || !strings.Contains(waiting[0].Reason, "ready") {
-		t.Fatalf("reason = %q", waiting[0].Reason)
-	}
-	// It is reported as blocked, with the reason as evidence.
-	held, _ := product.Get("TASK-005")
-	if held.Status != task.Blocked {
+	// Nothing was written to the task: the protocol is the scheduler, and a
+	// task that has not started needs no record saying so.
+	if held, _ := product.Get("TASK-005"); held.Status != task.Ready {
 		t.Fatalf("status = %s", held.Status)
 	}
-	records, _ := task.ListEvidence(product.Layout, "TASK-005")
-	if len(records) != 1 || records[0].Meta["waiting"] != waiting[0].Reason {
-		t.Fatalf("evidence = %+v", records)
-	}
-	// Polling again does not pile up identical notes.
-	if _, _, err := q.NextWaiting(context.Background()); !errors.Is(err, ErrEmpty) {
-		t.Fatal(err)
-	}
-	if records, _ := task.ListEvidence(product.Layout, "TASK-005"); len(records) != 1 {
-		t.Fatalf("%d records after a second poll", len(records))
+	if records, _ := task.ListEvidence(product.Layout, "TASK-005"); len(records) != 0 {
+		t.Fatalf("%d evidence records for a task that never ran", len(records))
 	}
 
-	// The framework task finishes: the product task is released.
+	// The framework task finishes: the product task is offered.
 	finish(t, framework, "TASK-004")
 	item, waiting, err = q.NextWaiting(context.Background())
 	if err != nil || item.TaskID != "TASK-005" || len(waiting) != 0 {
 		t.Fatalf("%+v %+v %v", item, waiting, err)
 	}
-	if got, _ := product.Get("TASK-005"); got.Status != task.Ready {
-		t.Fatalf("status = %s", got.Status)
-	}
 }
 
-// Without a resolver the runner does not guess: it holds the task and says
-// which flag it needs.
-func TestLocalWithoutAResolverHoldsAndSaysWhy(t *testing.T) {
+// Without a resolver, and with an alias nobody declared, the dependency is
+// reported as `waiting:` — nobody could answer for it, which is not the same
+// as it being open.
+func TestLocalUnanswerableDependencyWaits(t *testing.T) {
 	product := checkout(t, map[string]string{"TASK-005": ready("TASK-005", "Product work", "trilha:TASK-004")})
+
 	_, waiting, err := Local{Store: product}.NextWaiting(context.Background())
-	if !errors.Is(err, ErrEmpty) || len(waiting) != 1 {
+	if !errors.Is(err, ErrEmpty) || len(waiting) != 1 || waiting[0].Reason != "waiting:trilha:TASK-004" {
 		t.Fatalf("%+v %v", waiting, err)
 	}
-	if !strings.Contains(waiting[0].Reason, "--repo trilha=") {
-		t.Fatalf("reason = %q", waiting[0].Reason)
-	}
-}
 
-// An alias nobody declared, or a task that is not there, blocks — it is never
-// read as done.
-func TestLocalUnresolvableDependencyBlocks(t *testing.T) {
 	other := checkout(t, map[string]string{})
-	product := checkout(t, map[string]string{"TASK-005": ready("TASK-005", "Product work", "trilha:TASK-004")})
-
-	_, waiting, err := Local{Store: product, Resolver: Checkouts{"outro": other.Layout.Root}}.NextWaiting(context.Background())
-	if !errors.Is(err, ErrEmpty) || !strings.Contains(waiting[0].Reason, "unknown repository alias") {
+	product.Remote = Checkouts{"outro": other.Layout.Root}
+	_, waiting, err = Local{Store: product}.NextWaiting(context.Background())
+	if !errors.Is(err, ErrEmpty) || waiting[0].Reason != "waiting:trilha:TASK-004" {
 		t.Fatalf("%+v %v", waiting, err)
 	}
 
-	product2 := checkout(t, map[string]string{"TASK-005": ready("TASK-005", "Product work", "trilha:TASK-004")})
-	_, waiting, err = Local{Store: product2, Resolver: Checkouts{"trilha": other.Layout.Root}}.NextWaiting(context.Background())
-	if !errors.Is(err, ErrEmpty) || !strings.Contains(waiting[0].Reason, "not found") {
+	// A declared alias whose task is simply absent cannot be answered either.
+	product.Remote = Checkouts{"trilha": other.Layout.Root}
+	_, waiting, err = Local{Store: product}.NextWaiting(context.Background())
+	if !errors.Is(err, ErrEmpty) || waiting[0].Reason != "waiting:trilha:TASK-004" {
 		t.Fatalf("%+v %v", waiting, err)
 	}
 }
 
-// A task with no cross-repository dependency is offered as before, and one
-// that is waiting never hides a task that can run.
+// A task that is waiting never hides one that can run.
 func TestLocalStillOffersWhatCanRun(t *testing.T) {
 	framework := checkout(t, map[string]string{"TASK-004": ready("TASK-004", "Framework work")})
 	product := checkout(t, map[string]string{
 		"TASK-001": ready("TASK-001", "Waits", "trilha:TASK-004"),
 		"TASK-002": ready("TASK-002", "Runs now"),
 	})
-	q := Local{Store: product, Resolver: Checkouts{"trilha": framework.Layout.Root}}
+	product.Remote = Checkouts{"trilha": framework.Layout.Root}
+	q := Local{Store: product}
 	item, waiting, err := q.NextWaiting(context.Background())
 	if err != nil || item.TaskID != "TASK-002" {
 		t.Fatalf("%+v %v", item, err)
@@ -176,23 +156,58 @@ func TestLocalStillOffersWhatCanRun(t *testing.T) {
 
 // A local dependency still decides before any remote one is consulted.
 func TestLocalDependenciesStillApply(t *testing.T) {
-	framework := checkout(t, map[string]string{"TASK-004": done("TASK-004", "Framework work")})
+	framework := checkout(t, map[string]string{"TASK-004": ready("TASK-004", "Framework work")})
 	product := checkout(t, map[string]string{
 		"TASK-001": ready("TASK-001", "First"),
-		"TASK-002": "---\nid: TASK-002\ntitle: Second\nstatus: ready\nacceptance:\n  - ok\ndepends_on:\n  - TASK-001\n" + RemoteField + ":\n  - trilha:TASK-004\n---\n",
+		"TASK-002": ready("TASK-002", "Second", "TASK-001", "trilha:TASK-004"),
 	})
-	q := Local{Store: product, Resolver: Checkouts{"trilha": framework.Layout.Root}}
+	product.Remote = Checkouts{"trilha": framework.Layout.Root}
+	q := Local{Store: product}
 	item, _, err := q.NextWaiting(context.Background())
 	if err != nil || item.TaskID != "TASK-001" {
 		t.Fatalf("%+v %v", item, err)
 	}
-	// TASK-002 was never consulted, so it was not blocked either.
-	if got, _ := product.Get("TASK-002"); got.Status != task.Ready {
-		t.Fatalf("status = %s", got.Status)
+	// TASK-002 waits on both, and the reason says so.
+	waiting, err := q.Waiting(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range waiting {
+		if w.Task != "TASK-002" {
+			continue
+		}
+		if !strings.Contains(w.Reason, "TASK-001") || !strings.Contains(w.Reason, "trilha:TASK-004") {
+			t.Fatalf("reason = %q", w.Reason)
+		}
+		return
+	}
+	t.Fatalf("TASK-002 is not reported as waiting: %+v", waiting)
+}
+
+// Checkouts answers only what it can read, and never guesses "done".
+func TestCheckoutsResolver(t *testing.T) {
+	framework := checkout(t, map[string]string{"TASK-004": ready("TASK-004", "Framework work")})
+	c := Checkouts{"trilha": framework.Layout.Root, "vazio": t.TempDir()}
+
+	if status, ok := c.Status("trilha", "TASK-004"); !ok || status != task.Ready {
+		t.Fatalf("%q %v", status, ok)
+	}
+	for _, probe := range [][2]string{
+		{"outro", "TASK-004"},  // alias never declared
+		{"trilha", "TASK-009"}, // task not there
+		{"vazio", "TASK-004"},  // not a Trilha project
+	} {
+		if status, ok := c.Status(probe[0], probe[1]); ok {
+			t.Errorf("%v answered %q", probe, status)
+		}
+	}
+	if got := c.Aliases(); len(got) != 2 || got[0] != "trilha" || got[1] != "vazio" {
+		t.Fatalf("aliases = %v", got)
 	}
 }
 
-// The control plane resolves an alias the same way, and a 404 blocks.
+// The control plane resolves an alias the same way, and anything it cannot
+// answer leaves the dependency waiting rather than passing.
 func TestRemoteResolvesACrossProjectDependency(t *testing.T) {
 	var path string
 	status := "done"
@@ -206,39 +221,28 @@ func TestRemoteResolvesACrossProjectDependency(t *testing.T) {
 	}))
 	defer srv.Close()
 	q := Remote{BaseURL: srv.URL, Token: "tok", Worker: "w1", Project: "acervo"}
-	dep := RemoteDependency{Alias: "trilha", Task: "TASK-004"}
 
-	got, err := q.Status(context.Background(), dep)
-	if err != nil || got != task.Done {
-		t.Fatalf("%q %v", got, err)
+	got, ok := q.Status("trilha", "TASK-004")
+	if !ok || got != task.Done {
+		t.Fatalf("%q %v", got, ok)
 	}
 	if path != "/api/projects/trilha/tasks/TASK-004" {
 		t.Fatalf("path = %q", path)
 	}
 	status = "running"
-	if got, _ := q.Status(context.Background(), dep); got != task.Running {
-		t.Fatalf("status = %q", got)
+	if got, ok := q.Status("trilha", "TASK-004"); !ok || got != task.Running {
+		t.Fatalf("%q %v", got, ok)
 	}
 	status = "shrug"
-	if _, err := q.Status(context.Background(), dep); err == nil {
+	if _, ok := q.Status("trilha", "TASK-004"); ok {
 		t.Fatal("an invalid status was accepted")
 	}
 	status = ""
-	if _, err := q.Status(context.Background(), dep); !errors.Is(err, ErrUnknownAlias) {
-		t.Fatalf("err = %v", err)
+	if _, ok := q.Status("trilha", "TASK-004"); ok {
+		t.Fatal("a 404 was read as an answer")
 	}
-}
-
-// The protocol's own spelling is read too, once it accepts an alias inside
-// depends_on.
-func TestRemoteDependenciesReadBothSpellings(t *testing.T) {
-	tk := &task.Task{ID: "TASK-005", DependsOn: []string{"TASK-001", "trilha:TASK-004"}}
-	tk.Fields.SetList(RemoteField, []string{"trilha:TASK-004", "cloud:TASK-020"})
-	got := RemoteDependencies(tk)
-	if len(got) != 2 || got[0].String() != "cloud:TASK-020" || got[1].String() != "trilha:TASK-004" {
-		t.Fatalf("got %+v", got)
-	}
-	if local := LocalDependencies(tk); len(local) != 1 || local[0] != "TASK-001" {
-		t.Fatalf("local = %v", local)
+	// A control plane that is not there leaves it waiting, it does not pass.
+	if _, ok := (Remote{BaseURL: "http://127.0.0.1:1", Token: "t"}).Status("trilha", "TASK-004"); ok {
+		t.Fatal("an unreachable control plane answered")
 	}
 }

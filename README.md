@@ -80,8 +80,9 @@ the checks in a container on that network, where a service answers by its name.
 
 - The worktree is the only writable path that survives: the root filesystem is read-only and
   `/tmp` is a tmpfs that dies with the container.
-- The limits are the runner's, not the manifest's — cpus, memory, pids, `no-new-privileges`,
-  `cap-drop ALL` — because a declaration that can raise its own ceiling bounds nothing.
+- The limits are the runner's, not the manifest's — one CPU, 1 GiB of memory, 256 PIDs,
+  `no-new-privileges`, `cap-drop ALL` — because a declaration that can raise its own ceiling
+  bounds nothing.
 - The agent is not root: it runs as the user that owns the worktree. With every capability
   dropped there is no `CAP_DAC_OVERRIDE` to fall back on, so this is what makes the worktree
   writable and everything else not.
@@ -93,34 +94,38 @@ the checks in a container on that network, where a service answers by its name.
 
 ## Cross-repository dependencies
 
-A task in a product repository may wait for a task in another one. `next` resolves the
-aliases the operator names and does not offer a task whose dependency is still open:
-
-```bash
-trilha-runner next --repo trilha=../trilha --repo cloud=../trilha-cloud
-# · TASK-005: waiting:trilha:TASK-004 (running)
-```
-
-The task is reported as `blocked` with that reason as evidence, and released back to `ready`
-by the queue itself once every one of them is `done` — an agenda never strands on a block the
-runner put there. A dependency that cannot be resolved blocks too: the runner does not read
-what it cannot see as done. `queue.Remote` resolves the same dependency against the control
-plane with `GET /api/projects/{alias}/tasks/{id}`, where a 404 blocks rather than passes.
-
-Until the protocol accepts an alias inside `depends_on`
-([trilha-spec #11](https://github.com/emersonjoe/trilha-spec/issues/11)), a task declares them
-under `depends_on_remote`, which the protocol keeps untouched as an unknown field. Both
-spellings are read.
+A task in a product repository may wait for a task in another one. The protocol spells it with
+the alias in front, keeps it out of this repository's order, and refuses to start a task whose
+alias nobody answered for:
 
 ```markdown
 ---
 id: TASK-005
 title: Import from the framework
 status: ready
-depends_on_remote:
-  - trilha:TASK-004
+depends_on:
+  - TASK-004          # this repository
+  - trilha:TASK-004   # another one
 ---
 ```
+
+What the protocol does not decide is what an alias *means* — that is a machine's business, not
+a document's. `--repo` says:
+
+```bash
+trilha-runner next --repo trilha=../trilha --repo cloud=../trilha-cloud
+# · TASK-005: trilha:TASK-004
+```
+
+The task is not offered while the dependency is open, and the reason names it. A dependency
+nobody could answer for reads differently — `waiting:trilha:TASK-004` — because a dependency
+that cannot be seen is not one that has been met; the runner never reads it as done. The
+resolver goes on the store, so `next` and the run that follows it cannot disagree about whether
+a task may start.
+
+A Cloud-connected worker resolves the same dependency against the control plane
+(`GET /api/projects/{alias}/tasks/{id}`) instead of a path, so it needs no checkout of the
+other project.
 
 ## Evidence
 
@@ -149,17 +154,32 @@ carried it:
 {"metric":"p95_latency_ms","value":410,"threshold":300,"comparator":"<=","unit":"ms"}
 ```
 
-Comparators are `>=`, `<=`, `>`, `<`, `==` and `!=`. **A comparator that is not satisfied
-fails the verification even when every command exited 0**, so the task goes to `failed` and
-the `run` record's summary lists the metrics. An optional `dataset` says what was measured
-against; the runner hashes the manifest it names, never the data:
+The comparators are `>=`, `<=` and `==` — a gate is "at least", "at most" or "exactly", and
+anything subtler is a statistical test rather than a gate. **A comparator that is not satisfied
+fails the verification even when every command exited 0**, so the task goes to `failed` and the
+`run` record's summary lists the metrics. A metric with no threshold is a measurement, not a
+gate: it is recorded to be trended and it fails nothing.
+
+An optional `dataset` says what was measured against. It carries the hash of the set's
+*manifest*, never its content — a golden set holds real cases, and real cases hold personal
+data:
 
 ```json
 {"metric":"triage_top1","value":0.87,"threshold":0.85,"comparator":">=",
- "dataset":{"id":"triage-v3","manifest":"eval/golden/manifest.json"}}
+ "dataset":{"id":"triage-v3","sha256":"9f86d081…"}}
 ```
 
-Any other line a check prints is ordinary output and is ignored.
+Any other line a check prints is ordinary output and is ignored. The scanning, the records and
+the gating are the protocol's (`task.RunChecks`); what the runner adds is running them where
+the sandbox says and putting the numbers in the `run` record's summary.
+
+A task can also declare the gate as an acceptance criterion, which `trilha spec doctor` then
+checks was actually evidenced:
+
+```markdown
+acceptance:
+  - "metric: triage_top1 >= 0.85"
+```
 
 ## Worker: the bridge to trilha-cloud
 
@@ -237,10 +257,10 @@ middle, so it declares one instead of hiding it in a wrapper script:
 
 | Package | What it is |
 |---|---|
-| `runner` | the pipeline: `Runner.Run`, `Runner.Next`; `eval` metrics from check output |
+| `runner` | the pipeline: `Runner.Run`, `Runner.Next` |
 | `driver` | `exec`, `claude-code`, `ai`, `echo`; `driver.Register` for your own; `Access` for per-project credentials and residency |
 | `worktree` | git worktrees per task, commit, diff stat |
-| `queue` | `Local` (the graph, cross-repository dependencies included) and `Remote` (trilha-cloud client) |
+| `queue` | `Local` (the graph) and `Remote` (trilha-cloud client); `Checkouts` resolves a repository alias |
 | `sandbox` | `None` runs in the worktree; `Docker` runs the agent and the checks in a container with services |
 | `cmd/trilha-runner` | the CLI |
 

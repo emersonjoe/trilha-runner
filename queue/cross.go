@@ -15,123 +15,57 @@ import (
 
 // A cross-repository dependency is a task in one repository that waits for a
 // task in another: a product task that cannot start until a framework task is
-// done. The protocol spells it `<alias>:TASK-NNN`, and the alias is resolved
-// by the runner, never guessed — it is the operator who says which checkout
-// an alias means (`--repo trilha=../trilha`) or the control plane that knows.
-//
-// Until the protocol accepts an alias inside `depends_on` (trilha-spec #11),
-// a task declares them under `depends_on_remote`, which the protocol keeps as
-// an unknown field and round-trips untouched:
+// done. The protocol spells it `<alias>:TASK-NNN` inside `depends_on`, keeps
+// it out of this repository's topological order, and refuses to start a task
+// whose alias nobody answered for:
 //
 //	---
 //	id: TASK-005
-//	depends_on_remote:
-//	  - trilha:TASK-004
+//	depends_on:
+//	  - TASK-004          # this repository
+//	  - trilha:TASK-004   # another one
 //	---
 //
-// Both forms are read, so a checkout works before and after that change.
-
-// RemoteDependency is one dependency in another repository.
-type RemoteDependency struct {
-	Alias string
-	Task  string
-}
-
-// String is the protocol's spelling: alias:TASK-NNN.
-func (d RemoteDependency) String() string { return d.Alias + ":" + d.Task }
-
-// RemoteField is the transitional front matter key, read alongside the
-// protocol's own `depends_on`.
-const RemoteField = "depends_on_remote"
-
-// ParseDependency reads `alias:TASK-NNN`. A plain task id is local and
-// answers false.
-func ParseDependency(value string) (RemoteDependency, bool) {
-	alias, id, found := strings.Cut(strings.TrimSpace(value), ":")
-	if !found {
-		return RemoteDependency{}, false
-	}
-	alias, id = strings.TrimSpace(alias), strings.TrimSpace(id)
-	if alias == "" || !task.ValidID(id) {
-		return RemoteDependency{}, false
-	}
-	return RemoteDependency{Alias: alias, Task: id}, true
-}
-
-// RemoteDependencies answers a task's cross-repository dependencies, from
-// either spelling, without duplicates and in a stable order.
-func RemoteDependencies(t *task.Task) []RemoteDependency {
-	seen := map[string]bool{}
-	var out []RemoteDependency
-	add := func(value string) {
-		if d, ok := ParseDependency(value); ok && !seen[d.String()] {
-			seen[d.String()] = true
-			out = append(out, d)
-		}
-	}
-	for _, value := range t.DependsOn {
-		add(value)
-	}
-	for _, value := range t.Fields.GetList(RemoteField) {
-		add(value)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
-	return out
-}
-
-// LocalDependencies answers the dependencies inside this repository — what
-// the protocol's own graph can reason about.
-func LocalDependencies(t *task.Task) []string {
-	var out []string
-	for _, value := range t.DependsOn {
-		if _, remote := ParseDependency(value); !remote {
-			out = append(out, value)
-		}
-	}
-	return out
-}
+// What the protocol deliberately does not do is decide what an alias means —
+// that is a machine's business, not a document's. This file is the two ways a
+// runner answers: sibling checkouts on disk, and the control plane.
 
 // ErrUnknownAlias is an alias nobody told the runner how to resolve.
 var ErrUnknownAlias = errors.New("queue: unknown repository alias")
 
-// Resolver answers the status of a task in another repository.
-type Resolver interface {
-	// Status answers the dependency's status, or an error when it cannot be
-	// resolved. An unresolvable dependency blocks: the runner never assumes
-	// a task it cannot see is done.
-	Status(ctx context.Context, dep RemoteDependency) (task.Status, error)
-}
-
 // Checkouts resolves aliases against sibling checkouts on this machine,
 // through the protocol's own store: `--repo trilha=../trilha`.
+//
+// It answers false — not "done" — for anything it cannot read: an alias that
+// was never declared, a directory that is not a Trilha project, a task that is
+// not there. The protocol turns that into `waiting:<alias>:TASK-NNN`, because
+// a dependency nobody can see is not a dependency anybody has met.
 type Checkouts map[string]string
 
-// Status opens the sibling checkout and reads the task.
-func (c Checkouts) Status(ctx context.Context, dep RemoteDependency) (task.Status, error) {
-	dir, ok := c[dep.Alias]
+// Status implements task.Resolver.
+func (c Checkouts) Status(alias, id string) (task.Status, bool) {
+	dir, ok := c[alias]
 	if !ok {
-		return "", fmt.Errorf("%w: %q (have %s)", ErrUnknownAlias, dep.Alias, strings.Join(c.aliases(), ", "))
+		return "", false
 	}
 	store, err := task.Open(dir)
 	if err != nil {
-		return "", fmt.Errorf("queue: %s: %w", dep.Alias, err)
+		return "", false
 	}
-	t, err := store.Get(dep.Task)
+	t, err := store.Get(id)
 	if err != nil {
-		return "", fmt.Errorf("queue: %s: %w", dep.Alias, err)
+		return "", false
 	}
-	return t.Status, nil
+	return t.Status, true
 }
 
-func (c Checkouts) aliases() []string {
+// Aliases answers the aliases declared, sorted.
+func (c Checkouts) Aliases() []string {
 	out := make([]string, 0, len(c))
 	for alias := range c {
 		out = append(out, alias)
 	}
 	sort.Strings(out)
-	if len(out) == 0 {
-		return []string{"none: pass --repo alias=path"}
-	}
 	return out
 }
 
@@ -149,33 +83,32 @@ func ParseRepo(value string) (string, string, error) {
 }
 
 // Status asks the control plane for a task in another project of the same
-// account:
+// account, so a worker resolves an alias without a checkout of it:
 //
 //	GET /api/projects/{alias}/tasks/{id}   → 200 {"status":"done"} | 404
 //
-// A 404 is unresolvable, not done: the runner blocks rather than guess.
-func (r Remote) Status(ctx context.Context, dep RemoteDependency) (task.Status, error) {
-	resp, err := r.do(ctx, http.MethodGet, "/api/projects/"+dep.Alias+"/tasks/"+dep.Task, nil)
+// It implements task.Resolver, so anything it cannot answer — a 404, a
+// transport error, a status the protocol does not know — leaves the
+// dependency waiting rather than passing.
+func (r Remote) Status(alias, id string) (task.Status, bool) {
+	resp, err := r.do(context.Background(), http.MethodGet, "/api/projects/"+alias+"/tasks/"+id, nil)
 	if err != nil {
-		return "", err
+		return "", false
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("%w: %s", ErrUnknownAlias, dep)
-	}
 	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("queue: %s: %s: %s", dep, resp.Status, strings.TrimSpace(string(body)))
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return "", false
 	}
 	var answer struct {
 		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
-		return "", err
+		return "", false
 	}
 	status := task.Status(strings.TrimSpace(answer.Status))
 	if !status.Valid() {
-		return "", fmt.Errorf("queue: %s: %q is not a status", dep, answer.Status)
+		return "", false
 	}
-	return status, nil
+	return status, true
 }
