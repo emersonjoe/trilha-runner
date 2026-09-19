@@ -2,9 +2,11 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/emersonjoe/trilha-runner/driver"
@@ -162,4 +164,48 @@ echo '{"metric":"a11y_violations","value":0,"threshold":0,"comparator":"==","dat
 		return
 	}
 	t.Fatal("no eval record")
+}
+
+// Residency is enforced by the runner too: a refusal is a `run` record with
+// stage `policy` and the task goes to failed, never to review.
+func TestPolicyRefusalIsEvidenceAndFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	dir := repo(t)
+	r, _ := New(dir)
+	r.Command = "true"
+	r.Access = &driver.Access{
+		Provider:     "anthropic",
+		BaseURL:      "https://api.anthropic.com/v1",
+		Credential:   "sk-ant-0123456789abcdef",
+		AllowedHosts: []string{"gateway.example.br"},
+	}
+	tk, _ := r.Store.Create("Residency", func(x *task.Task) {
+		x.Status = task.Ready
+		x.Acceptance = []string{"stays in the country"}
+		x.Checks = []string{"true"}
+	})
+	res, err := r.Run(context.Background(), tk.ID)
+	if !errors.Is(err, driver.ErrPolicy) {
+		t.Fatalf("err = %v", err)
+	}
+	if res.Status != task.Failed || res.Passed {
+		t.Fatalf("res = %+v", res)
+	}
+	ev, _ := task.ListEvidence(r.Layout, tk.ID)
+	if len(ev) != 1 || ev[0].Kind != "run" || ev[0].Meta["stage"] != "policy" {
+		t.Fatalf("evidence = %+v", ev)
+	}
+	if ev[0].Meta["base_url"] != "https://api.anthropic.com/v1" || ev[0].Meta["allowed_hosts"] != "gateway.example.br" {
+		t.Fatalf("meta = %v", ev[0].Meta)
+	}
+	// Never the credential, in any field of the record.
+	blob := ev[0].Note + ev[0].Output
+	for _, v := range ev[0].Meta {
+		blob += v
+	}
+	if strings.Contains(blob, r.Access.Credential) {
+		t.Fatalf("the credential leaked into the evidence: %+v", ev[0])
+	}
 }

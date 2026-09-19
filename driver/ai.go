@@ -41,6 +41,25 @@ func (d AI) Execute(ctx context.Context, job Job) (Output, error) {
 	if cli == nil {
 		cli = ai.NewFromEnv()
 	}
+	// A run that carries its own access uses it instead of the worker's
+	// environment: one worker, one key per project.
+	if a := job.Access; a != nil && d.Client == nil {
+		if a.BaseURL != "" {
+			cli.BaseURL = strings.TrimSuffix(a.BaseURL, "/")
+		}
+		if a.Credential != "" {
+			cli.APIKey = a.Credential
+		}
+		if a.Model != "" {
+			cli.Model = a.Model
+		}
+	}
+	// Residency: the endpoint this run is about to call must be one the
+	// project allows. The refusal happens before the first request, so no
+	// data leaves the machine.
+	if err := job.Access.Allows(cli.BaseURL); err != nil {
+		return Output{Meta: policyMeta(job.Access)}, err
+	}
 	model := ""
 	if job.Agent != nil && job.Agent.Model != "" {
 		model = job.Agent.Model
@@ -79,7 +98,7 @@ func (d AI) Execute(ctx context.Context, job Job) (Output, error) {
 	res, err := ai.Run(ctx, cli, agent, job.Prompt)
 	o := Output{Meta: map[string]string{"driver": "ai", "model": firstNonEmpty(model, cli.Model), "elapsed": time.Since(start).Round(time.Millisecond).String()}}
 	if res != nil {
-		o.Text = tail(res.Output)
+		o.Text = Redact(tail(res.Output), job.Access.Secrets())
 		o.Meta["turns"] = strconv.Itoa(res.Turns)
 		o.Meta["steps"] = strconv.Itoa(len(res.Steps))
 		o.Meta["tokens"] = strconv.Itoa(res.Usage.TotalTokens)

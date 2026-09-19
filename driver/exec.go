@@ -34,15 +34,22 @@ func (Exec) Execute(ctx context.Context, job Job) (Output, error) {
 	if len(args) == 0 {
 		return Output{}, errors.New("exec: no command: set `command:` in the agent manifest or pass --cmd")
 	}
+	// The run's model access, when the control plane sent one, reaches the
+	// agent only here — as process environment — and a base URL outside the
+	// project's allowed hosts is refused before the agent starts.
+	access, err := job.Access.Env()
+	if err != nil {
+		return Output{Meta: policyMeta(job.Access)}, err
+	}
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = job.Dir
 	cmd.Stdin = strings.NewReader(job.Prompt)
-	cmd.Env = append(os.Environ(), append([]string{"TRILHA_TASK=" + job.Task.ID, "TRILHA_WORKTREE=" + job.Dir}, job.Env...)...)
+	cmd.Env = append(os.Environ(), append([]string{"TRILHA_TASK=" + job.Task.ID, "TRILHA_WORKTREE=" + job.Dir}, append(job.Env, access...)...)...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	err := cmd.Run()
-	o := Output{Text: tail(out.String()), Meta: map[string]string{"driver": "exec", "command": command}}
+	err = cmd.Run()
+	o := Output{Text: Redact(tail(out.String()), job.Access.Secrets()), Meta: map[string]string{"driver": "exec", "command": command}}
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/emersonjoe/trilha-runner/driver"
 	"github.com/emersonjoe/trilha-spec/task"
 )
 
@@ -22,6 +23,11 @@ type Item struct {
 	// The control plane filters on them; the worker checks them again,
 	// because a claim it cannot honour must not become a silent failure.
 	Requires []string `json:"requires,omitempty"`
+	// AI is the project's model access, sealed by the control plane and
+	// disclosed only on the claim, the way DeploymentWork.Secrets already
+	// travels. The worker never persists it: it reaches the driver's process
+	// environment and nowhere else, and it is redacted from captured output.
+	AI *driver.Access `json:"ai,omitempty"`
 }
 
 // Capabilities is what a worker says it can do, how much it can take and

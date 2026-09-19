@@ -3,9 +3,10 @@
 // work in — and answers what the agent said. The runner does not care which
 // model or which CLI is behind it; the manifest's `driver` field picks one.
 //
-//	exec  runs the manifest's command with the prompt on stdin (claude, codex, aider…)
-//	ai    runs an agent loop on a chat-completion model, with file tools scoped to the worktree
-//	echo  writes the prompt's first line to a file; the deterministic driver tests use
+//	exec         runs the manifest's command with the prompt on stdin (claude, codex, aider…)
+//	claude-code  exec with the argv fixed and the credential from the run's Access
+//	ai           runs an agent loop on a chat-completion model, with file tools scoped to the worktree
+//	echo         writes the prompt's first line to a file; the deterministic driver tests use
 package driver
 
 import (
@@ -33,6 +34,11 @@ type Job struct {
 	Command string
 	// Env is added to the agent's environment.
 	Env []string
+	// Access is the per-project model access the control plane delivered with
+	// this run, if any: provider, endpoint, credential and the hosts the
+	// credential may be spent on. It reaches the agent as environment and is
+	// redacted from what the driver keeps.
+	Access *Access
 }
 
 // Output is what an execution answered.
@@ -54,9 +60,10 @@ type Driver interface {
 var ErrUnknown = errors.New("driver: unknown driver")
 
 var registry = map[string]func() Driver{
-	"exec": func() Driver { return Exec{} },
-	"ai":   func() Driver { return AI{} },
-	"echo": func() Driver { return Echo{} },
+	"exec":        func() Driver { return Exec{} },
+	"claude-code": func() Driver { return ClaudeCode{} },
+	"ai":          func() Driver { return AI{} },
+	"echo":        func() Driver { return Echo{} },
 }
 
 // New answers a driver by name.

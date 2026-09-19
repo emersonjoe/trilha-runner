@@ -67,7 +67,7 @@ func TestRunEcho(t *testing.T) {
 	if out, err := outside.CombinedOutput(); err == nil || !strings.Contains(string(out), "no .trilha") {
 		t.Fatalf("outside a project:\n%s", out)
 	}
-	if out := sh(t, dir, bin, "drivers"); !strings.Contains(out, "ai\necho\nexec") {
+	if out := sh(t, dir, bin, "drivers"); !strings.Contains(out, "ai\nclaude-code\necho\nexec") {
 		t.Fatalf("drivers:\n%s", out)
 	}
 }

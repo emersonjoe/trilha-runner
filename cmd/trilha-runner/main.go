@@ -30,7 +30,7 @@ const usage = `trilha-runner ` + version + ` — executes tasks of the Trilha pr
 
 usage: trilha-runner <command> [flags]
 
-  run <task-id> [--driver exec|ai|echo] [--cmd "claude -p -"] [--json]
+  run <task-id> [--driver exec|claude-code|ai|echo] [--cmd "claude -p -"] [--json]
                          run one ready task in its own worktree, verify, record evidence
   next [flags of run]    run the first task that is ready with every dependency done
   worker --cloud URL --token T --project P [--workspace-root DIR] [--repo URL]
@@ -131,7 +131,7 @@ func newRunnerAt(path, drv, command string, out io.Writer) (*runner.Runner, erro
 
 func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error {
 	fs := flags(cmd)
-	drv := fs.String("driver", "", "exec | ai | echo (default: the agent manifest's)")
+	drv := fs.String("driver", "", "exec | claude-code | ai | echo (default: the agent manifest's)")
 	command := fs.String("cmd", "", "command for the exec driver")
 	asJSON := fs.Bool("json", false, "print the result as JSON")
 	pos, err := parse(fs, args)

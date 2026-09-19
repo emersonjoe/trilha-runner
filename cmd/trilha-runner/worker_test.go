@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emersonjoe/trilha-runner/driver"
 	"github.com/emersonjoe/trilha-runner/queue"
 )
 
@@ -46,9 +47,11 @@ type plane struct {
 	pending []string
 	// requires is attached to every item handed out.
 	requires []string
-	claims   []queue.Capabilities
-	beats    []map[string]any
-	results  map[string]queue.Result
+	// access is the per-project model access disclosed on the claim.
+	access  *driver.Access
+	claims  []queue.Capabilities
+	beats   []map[string]any
+	results map[string]queue.Result
 	// live is the highest number of runs claimed and not yet reported.
 	open, live int
 }
@@ -77,7 +80,7 @@ func (p *plane) server(t *testing.T) *httptest.Server {
 			if p.open > p.live {
 				p.live = p.open
 			}
-			json.NewEncoder(w).Encode(queue.Item{ID: "run-" + id, Project: c.Project, TaskID: id, Requires: p.requires})
+			json.NewEncoder(w).Encode(queue.Item{ID: "run-" + id, Project: c.Project, TaskID: id, Requires: p.requires, AI: p.access})
 		case strings.HasSuffix(r.URL.Path, "/result"):
 			var res queue.Result
 			json.NewDecoder(r.Body).Decode(&res)
@@ -228,5 +231,51 @@ func TestWorkerCapacityRunsTwoAndHoldsTheThird(t *testing.T) {
 	}
 	if !sawLoad {
 		t.Fatal("no claim reported a run in flight")
+	}
+}
+
+// The credential the control plane sealed for this project reaches the agent
+// and is never written down by the worker.
+func TestWorkerPassesProjectAccessToTheAgent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	dir := project(t, 1)
+	os.WriteFile(filepath.Join(dir, "agent.sh"), []byte(
+		"printf %s \"$CLAUDE_CODE_OAUTH_TOKEN\" > TRILHA_RUN.md\necho \"key $CLAUDE_CODE_OAUTH_TOKEN\"\n"), 0o755)
+	sh(t, dir, "git", "add", "-A")
+	sh(t, dir, "git", "commit", "-q", "-m", "agent")
+
+	const token = "sk-ant-oat-0123456789abcdef"
+	p := &plane{pending: []string{"TASK-001"}}
+	p.access = &driver.Access{Provider: "claude-code", Credential: token}
+	srv := p.server(t)
+	o := p.options(srv, dir, nil, 1)
+	o.Driver = "exec"
+	o.Command = "sh agent.sh"
+	o.Once = true
+	if err := runWorker(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	res := p.results["run-TASK-001"]
+	if !res.Passed {
+		t.Fatalf("result = %+v", res)
+	}
+	// The agent had the token: it wrote it into the file the check looks for.
+	if !strings.Contains(res.Log, "[REDACTED]") || strings.Contains(res.Log, token) {
+		t.Fatalf("the token is in the log reported to the control plane: %q", res.Log)
+	}
+	// Nothing the worker reports back carries it either.
+	blob := res.Log + res.Error
+	for _, e := range res.Evidence {
+		blob += e.Output + e.Note
+		for _, v := range e.Meta {
+			blob += v
+		}
+	}
+	if strings.Contains(blob, token) {
+		t.Fatal("the token leaked into the reported evidence")
 	}
 }

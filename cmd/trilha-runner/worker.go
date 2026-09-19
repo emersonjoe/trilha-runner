@@ -251,6 +251,7 @@ func (w *worker) execute(ctx context.Context, item queue.Item) {
 		return
 	}
 	active.By = "trilha-runner worker " + w.Name
+	active.Access = item.AI
 	bundle, bundleErr := w.Queue.Bundle(ctx, item)
 	if bundleErr == nil {
 		active, bundleErr = w.materialize(ctx, item, bundle)
@@ -297,6 +298,7 @@ func (w *worker) materialize(ctx context.Context, item queue.Item, bundle queue.
 		return nil, err
 	}
 	active.By = "trilha-runner worker " + w.Name
+	active.Access = item.AI
 	return active, nil
 }
 

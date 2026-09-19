@@ -36,6 +36,10 @@ type Runner struct {
 	// Command overrides the manifest's command (exec driver).
 	Command string
 	Sandbox sandbox.Sandbox
+	// Access is the per-project model access the control plane delivered with
+	// this run, if any. The runner passes it to the driver and keeps it
+	// nowhere else.
+	Access *driver.Access
 	// By is recorded as the author of the evidence.
 	By string
 	// Log receives progress lines; nil discards them.
@@ -116,9 +120,16 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 		return nil, err
 	}
 	res := &Result{Task: id, Driver: drv.Name()}
-	fail := func(stage string, cause error) (*Result, error) {
+	fail := func(stage string, cause error, extra ...map[string]string) (*Result, error) {
 		r.logf("%s: %v", stage, cause)
-		task.Record(r.Layout, task.Evidence{Task: id, Kind: "run", By: r.By, Note: stage + ": " + cause.Error(), Meta: map[string]string{"driver": drv.Name(), "stage": stage}})
+		meta := map[string]string{"driver": drv.Name(), "stage": stage}
+		for _, m := range extra {
+			for k, v := range m {
+				meta[k] = v
+			}
+		}
+		meta["stage"] = stage
+		task.Record(r.Layout, task.Evidence{Task: id, Kind: "run", By: r.By, Note: stage + ": " + cause.Error(), Meta: meta})
 		if _, err := r.Store.Move(id, task.Failed); err == nil {
 			res.Status = task.Failed
 		}
@@ -144,12 +155,17 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	defer release()
 
 	r.logf("driver %s starting", drv.Name())
-	out, execErr := drv.Execute(ctx, driver.Job{Task: t, Agent: man, Prompt: pack.Markdown(), Dir: env.Dir, Command: r.Command, Env: env.Env})
+	out, execErr := drv.Execute(ctx, driver.Job{Task: t, Agent: man, Prompt: pack.Markdown(), Dir: env.Dir, Command: r.Command, Env: env.Env, Access: r.Access})
 	res.Output = out.Text
 	logPath := filepath.Join(r.Layout.Runs(), id, "agent.log")
 	os.MkdirAll(filepath.Dir(logPath), 0o755)
 	os.WriteFile(logPath, []byte(out.Text), 0o644)
 	if execErr != nil {
+		// A refusal by policy is not a failure to execute: the run never
+		// started, and the evidence says which rule stopped it.
+		if errors.Is(execErr, driver.ErrPolicy) {
+			return fail("policy", execErr, out.Meta)
+		}
 		return fail("execution", execErr)
 	}
 
