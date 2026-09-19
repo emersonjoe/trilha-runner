@@ -57,6 +57,20 @@ type AIConfig struct {
 	AllowedHosts []string
 }
 
+// CredentialEnv answers the environment a project's credential is exported
+// as, so one place names the variable and the runner can put it inside a
+// sandbox before any command runs.
+func CredentialEnv(ai *AIConfig) []string {
+	if ai == nil || ai.Credential == "" {
+		return nil
+	}
+	name := "ANTHROPIC_API_KEY"
+	if strings.Contains(strings.ToLower(ai.Provider), "oauth") {
+		name = "CLAUDE_CODE_OAUTH_TOKEN"
+	}
+	return []string{name + "=" + ai.Credential}
+}
+
 // PolicyError means execution was refused before contacting the provider.
 type PolicyError struct{ Reason string }
 

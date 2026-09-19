@@ -2,7 +2,10 @@ package sandbox
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -31,18 +34,42 @@ func TestDockerPostgresAndTeardown(t *testing.T) {
 	}
 	ctx := context.Background()
 	docker := Docker{Image: "postgres:16-alpine", Services: []Service{{Name: "db", Image: "postgres:16-alpine", Env: map[string]string{"POSTGRES_PASSWORD": "test"}, Ready: []string{"pg_isready", "-U", "postgres"}}}}
-	environment, release, err := docker.Prepare(ctx, t.TempDir())
+	worktree := t.TempDir()
+	environment, release, err := docker.Prepare(ctx, worktree, []string{"TRILHA_TASK=TASK-001"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(environment.Prefix) == 0 {
 		t.Fatal("Docker sandbox returned no execution prefix")
 	}
-	args := append(append([]string(nil), environment.Prefix[1:]...), "pg_isready", "-h", "db", "-U", "postgres")
-	if output, err := exec.Command(environment.Prefix[0], args...).CombinedOutput(); err != nil {
+	inside := func(argv ...string) *exec.Cmd {
+		return exec.Command(environment.Prefix[0], append(append([]string(nil), environment.Prefix[1:]...), argv...)...)
+	}
+	if output, err := inside("pg_isready", "-h", "db", "-U", "postgres").CombinedOutput(); err != nil {
 		t.Fatalf("postgres check: %v: %s", err, output)
 	}
-	container := environment.Prefix[len(environment.Prefix)-2]
+	// The run's environment reached the container without any command
+	// carrying it.
+	if output, err := inside("sh", "-c", "echo $TRILHA_TASK:$TRILHA_WORKTREE").Output(); err != nil ||
+		strings.TrimSpace(string(output)) != "TASK-001:/workspace" {
+		t.Fatalf("environment inside = %q (%v)", output, err)
+	}
+	// The agent is the worktree's owner, not root, and the worktree is
+	// writable because of it: with every capability dropped there is no
+	// CAP_DAC_OVERRIDE to fall back on.
+	if output, err := inside("id", "-u").Output(); err != nil || strings.TrimSpace(string(output)) != strconv.Itoa(os.Getuid()) {
+		t.Fatalf("agent uid = %q, want %d (%v)", output, os.Getuid(), err)
+	}
+	if output, err := inside("touch", "/workspace/written").CombinedOutput(); err != nil {
+		t.Fatalf("the worktree is not writable: %v: %s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "written")); err != nil {
+		t.Fatalf("the worktree is not the host's: %v", err)
+	}
+	if output, err := inside("touch", "/etc/escaped").CombinedOutput(); err == nil {
+		t.Fatalf("the root filesystem is writable: %s", output)
+	}
+	container := environment.Prefix[len(environment.Prefix)-1]
 	runID := strings.TrimSuffix(container, "-agent")
 	if err := release(); err != nil {
 		t.Fatal(err)

@@ -2,6 +2,27 @@
 
 This project follows semantic versioning.
 
+## Unreleased
+
+### Security
+
+- The project's credential no longer reaches a command line. The run's environment enters the
+  Docker sandbox once through a `0600` file at `docker run`, and `docker exec` carries no
+  `KEY=VALUE`: an argument of `docker exec` is an argument of a host process, and `ps` showed it
+  to every user on the machine.
+- The sandboxed agent drops every capability (`--cap-drop ALL`) and runs as the user that owns
+  the worktree rather than as root. The two go together: without `CAP_DAC_OVERRIDE` a root agent
+  cannot write a worktree the operator owns, so running as the owner is what keeps the one
+  writable path writable.
+
+### Changed
+
+- `sandbox.Sandbox.Prepare` takes the run's environment, so a sandbox can carry a credential
+  into the container instead of each command carrying it.
+- A container that does not stay up is reported with its own output, and a service that has
+  exited is caught before its readiness command is waited on rather than after the timeout.
+- `Prepare` answers a no-op release rather than nil on failure, so deferring it cannot panic.
+
 ## 0.3.0 — 2026-09-18
 
 ### Added
