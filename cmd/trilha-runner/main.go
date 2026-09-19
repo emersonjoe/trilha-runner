@@ -23,7 +23,7 @@ import (
 	"github.com/emersonjoe/trilha-runner/worktree"
 )
 
-const version = "0.3.0"
+const version = "0.3.2"
 
 const usage = `trilha-runner ` + version + ` — executes tasks of the Trilha protocol
 

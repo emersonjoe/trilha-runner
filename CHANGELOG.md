@@ -2,6 +2,17 @@
 
 This project follows semantic versioning.
 
+## 0.3.2 — 2026-09-19
+
+### Fixed
+
+- `trilha-runner version`, the usage banner and the version a worker reports to the control
+  plane said `0.3.0` while the binary was `0.3.1`: neither of the changes released as 0.3.1
+  bumped the constant. A worker announces `RunnerVersion` and `DriverVersions` on every
+  heartbeat and claim, so the whole fleet was identifying itself by a version it was not
+  running — this is the constant catching up, and a test now fails when it drifts from the
+  newest section of this file again.
+
 ## 0.3.1 — 2026-09-19
 
 ### Fixed
