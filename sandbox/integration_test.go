@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -126,11 +127,19 @@ func TestTeardownLeavesNothingBehind(t *testing.T) {
 	box := requireDocker(t)
 	// --all, so a container that was merely stopped rather than removed is
 	// caught as a leftover too.
-	names := func(kind string, extra ...string) string {
-		args := append(append([]string{kind, "ls"}, extra...), "--format", "{{.Name}}")
-		out, err := exec.Command("docker", args...).Output()
+	// A container's name field is `.Names`, a network's is `.Name`.
+	containers := func(extra ...string) string {
+		args := append(append([]string{"container", "ls"}, extra...), "--format", "{{.Names}}")
+		out, err := exec.Command("docker", args...).CombinedOutput()
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("docker %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	networks := func() string {
+		out, err := exec.Command("docker", "network", "ls", "--format", "{{.Name}}").CombinedOutput()
+		if err != nil {
+			t.Fatalf("docker network ls: %v\n%s", err, out)
 		}
 		return string(out)
 	}
@@ -153,7 +162,7 @@ func TestTeardownLeavesNothingBehind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(names("container"), "trilha-task-009") {
+	if !strings.Contains(containers(), "trilha-task-009") {
 		t.Fatal("the sandbox did not start")
 	}
 	if !env.Inside() {
@@ -162,10 +171,10 @@ func TestTeardownLeavesNothingBehind(t *testing.T) {
 	if err := release(); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(names("container", "--all"), "trilha-task-009") {
+	if strings.Contains(containers("--all"), "trilha-task-009") {
 		t.Fatal("a container outlived the run")
 	}
-	if strings.Contains(names("network"), "trilha-task-009") {
+	if strings.Contains(networks(), "trilha-task-009") {
 		t.Fatal("a network outlived the run")
 	}
 }
@@ -196,11 +205,18 @@ func TestOnlyTheWorktreeIsWritable(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "written")); err != nil {
 		t.Fatalf("the worktree is not the host's: %v", err)
 	}
+	// It writes as the user that owns the worktree, not as root. This is what
+	// makes the worktree writable at all once every capability is dropped:
+	// without CAP_DAC_OVERRIDE, root does not get past the directory's mode.
+	out, err := inside("id -u").Output()
+	if err != nil || strings.TrimSpace(string(out)) != strconv.Itoa(os.Getuid()) {
+		t.Fatalf("the agent runs as uid %q, want %d (%v)", strings.TrimSpace(string(out)), os.Getuid(), err)
+	}
 	if err := run("touch /usr/local/escaped"); err == nil {
 		t.Fatal("the root filesystem is writable")
 	}
 	// The environment reached the container without ever being on a command line.
-	out, err := inside("echo $TRILHA_WORKTREE").Output()
+	out, err = inside("echo $TRILHA_WORKTREE").Output()
 	if err != nil || strings.TrimSpace(string(out)) != "/workspace" {
 		t.Fatalf("TRILHA_WORKTREE = %q (%v)", out, err)
 	}

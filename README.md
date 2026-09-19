@@ -82,6 +82,9 @@ the checks in a container on that network, where a service answers by its name.
   `/tmp` is a tmpfs that dies with the container.
 - The limits are the runner's, not the manifest's — cpus, memory, pids, `no-new-privileges`,
   `cap-drop ALL` — because a declaration that can raise its own ceiling bounds nothing.
+- The agent is not root: it runs as the user that owns the worktree. With every capability
+  dropped there is no `CAP_DAC_OVERRIDE` to fall back on, so this is what makes the worktree
+  writable and everything else not.
 - Nothing mounts the Docker socket. A sandbox that can talk to the daemon is not a sandbox, so
   this exists only where the worker runs, on a host the operator labelled `docker`, never in a
   control plane.

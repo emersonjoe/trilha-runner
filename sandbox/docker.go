@@ -290,6 +290,16 @@ func (d Docker) Prepare(ctx context.Context, req Request) (Env, func() error, er
 		"--memory", d.limits().Memory, "--cpus", d.limits().CPUs,
 		"--env-file", envFile,
 		"--entrypoint", KeepAlive[0]}
+	// The agent runs as the user that owns the worktree, and two reasons point
+	// the same way. With every capability dropped, root inside the container
+	// no longer bypasses file permission checks — CAP_DAC_OVERRIDE is gone —
+	// so a worktree owned by the operator would not be writable by a root
+	// agent at all. And an agent that is not root is a smaller blast radius
+	// for the one path it can write. A system with no uid answers -1 and the
+	// flag is left out.
+	if uid := os.Getuid(); uid >= 0 {
+		args = append(args, "--user", strconv.Itoa(uid)+":"+strconv.Itoa(os.Getgid()))
+	}
 	args = append(args, req.Spec.Image)
 	args = append(args, KeepAlive[1:]...)
 	if _, err := d.run(ctx, args...); err != nil {
@@ -420,7 +430,10 @@ func writeEnvFile(req Request) (string, error) {
 	if err := file.Chmod(0o600); err != nil {
 		return file.Name(), err
 	}
-	lines := append([]string{"TRILHA_TASK=" + req.Task, "TRILHA_WORKTREE=" + WorkDir}, req.Env...)
+	// HOME first, so anything the run or the manifest sets wins over it: a
+	// plain uid has no home directory of its own and most toolchains want
+	// one, and the tmpfs is the writable path that is not the worktree.
+	lines := append([]string{"HOME=/tmp", "TRILHA_TASK=" + req.Task, "TRILHA_WORKTREE=" + WorkDir}, req.Env...)
 	if req.Spec != nil {
 		for _, key := range sortedKeys(req.Spec.Env) {
 			lines = append(lines, key+"="+req.Spec.Env[key])

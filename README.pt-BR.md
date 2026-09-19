@@ -82,6 +82,9 @@ nessa rede, onde um serviço responde pelo nome.
   leitura e `/tmp` é um tmpfs que morre com o container.
 - Os limites são do runner, não do manifesto — cpus, memória, pids, `no-new-privileges`,
   `cap-drop ALL` — porque uma declaração que levanta o próprio teto não limita nada.
+- O agente não é root: roda como o usuário dono do worktree. Com todas as capabilities
+  derrubadas não existe `CAP_DAC_OVERRIDE` de reserva, então é isso que torna o worktree
+  gravável e todo o resto não.
 - Nada monta o socket do Docker. Um sandbox que fala com o daemon não é sandbox, então isto
   existe só onde o worker roda, num host que o operador rotulou `docker`, nunca num control
   plane.

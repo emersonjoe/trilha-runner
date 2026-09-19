@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -122,13 +123,23 @@ func TestDockerPreparesServicesThenTheAgentContainer(t *testing.T) {
 		t.Fatalf("the agent must start after the service is ready:\n%s", strings.Join(lines, "\n"))
 	}
 	agentCall := lines[agentAt]
+	// The image and the keep-alive are the last words of the line: everything
+	// after the image name is the container's own argv.
+	if !strings.HasSuffix(agentCall, " golang:1.22 2147483647") {
+		t.Errorf("agent call does not end with the image and the keep-alive:\n%s", agentCall)
+	}
+	// It runs as the user that owns the worktree, not as root: with every
+	// capability dropped, root would not be able to write there.
+	if !strings.Contains(agentCall, fmt.Sprintf("--user %d:%d", os.Getuid(), os.Getgid())) {
+		t.Errorf("agent call does not run as the worktree's owner:\n%s", agentCall)
+	}
 	for _, want := range []string{
 		"--name trilha-task-001", "--network trilha-task-001",
 		"--volume " + worktree + ":/workspace", "--workdir /workspace",
 		"--read-only", "--tmpfs /tmp:rw,size=256m",
 		"--security-opt no-new-privileges", "--cap-drop ALL",
 		"--pids-limit 512", "--memory 4g", "--cpus 2",
-		"--entrypoint sleep golang:1.22 2147483647",
+		"--entrypoint sleep",
 	} {
 		if !strings.Contains(agentCall, want) {
 			t.Errorf("agent call misses %q:\n%s", want, agentCall)
@@ -163,7 +174,7 @@ func TestDockerPreparesServicesThenTheAgentContainer(t *testing.T) {
 	}
 	body, _ := os.ReadFile(envFile)
 	for _, want := range []string{"TRILHA_TASK=TASK-001", "TRILHA_WORKTREE=/workspace",
-		"ANTHROPIC_API_KEY=sk-secret-0123456789", "CGO_ENABLED=0"} {
+		"ANTHROPIC_API_KEY=sk-secret-0123456789", "CGO_ENABLED=0", "HOME=/tmp"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("env file misses %q:\n%s", want, body)
 		}
