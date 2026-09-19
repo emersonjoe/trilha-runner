@@ -76,7 +76,7 @@ func TestToolsStayInside(t *testing.T) {
 		t.Fatalf("list = %q", out)
 	}
 	if runtime.GOOS != "windows" {
-		if out, _ := runCommand(root).Func(ctx, []byte(`{"command":"sh -c \"exit 2\""}`)); !strings.Contains(out, `"exit_code":2`) {
+		if out, _ := runCommand(Job{Dir: root}).Func(ctx, []byte(`{"command":"sh -c \"exit 2\""}`)); !strings.Contains(out, `"exit_code":2`) {
 			t.Fatalf("run = %q", out)
 		}
 	}

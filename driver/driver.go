@@ -39,6 +39,27 @@ type Job struct {
 	// credential may be spent on. It reaches the agent as environment and is
 	// redacted from what the driver keeps.
 	Access *Access
+	// Prefix starts a command inside the sandbox when the work does not
+	// happen on the host, e.g. `docker exec --workdir /workspace trilha-…`.
+	// The driver prepends it to whatever it was going to run.
+	Prefix []string
+	// WorkDir is the worktree as the agent sees it; Dir when there is no
+	// sandbox in the way.
+	WorkDir string
+}
+
+// argv answers the program and arguments to start for a command, inside the
+// sandbox when there is one.
+func (j Job) argv(command string) []string {
+	return append(append([]string(nil), j.Prefix...), task.SplitCommand(command)...)
+}
+
+// workDir is the worktree as the agent sees it.
+func (j Job) workDir() string {
+	if j.WorkDir != "" {
+		return j.WorkDir
+	}
+	return j.Dir
 }
 
 // Output is what an execution answered.

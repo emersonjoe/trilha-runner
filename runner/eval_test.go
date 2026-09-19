@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/emersonjoe/trilha-runner/driver"
+	"github.com/emersonjoe/trilha-runner/sandbox"
 	"github.com/emersonjoe/trilha-spec/task"
 )
 
@@ -207,5 +208,66 @@ func TestPolicyRefusalIsEvidenceAndFails(t *testing.T) {
 	}
 	if strings.Contains(blob, r.Access.Credential) {
 		t.Fatalf("the credential leaked into the evidence: %+v", ev[0])
+	}
+}
+
+// wrapping is a sandbox that says the work happens somewhere else without
+// needing a container runtime: it is how the runner's own wiring is tested
+// on a machine with no Docker.
+type wrapping struct {
+	prefix   []string
+	released bool
+}
+
+func (w *wrapping) Name() string { return "wrapping" }
+
+func (w *wrapping) Prepare(ctx context.Context, req sandbox.Request) (sandbox.Env, func() error, error) {
+	return sandbox.Env{Dir: req.Dir, WorkDir: "/workspace", Prefix: w.prefix},
+		func() error { w.released = true; return nil }, nil
+}
+
+// With a sandbox in the way, the checks run through it and the evidence says
+// so — and the sandbox is released whatever happened.
+func TestChecksRunInsideTheSandbox(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	dir := repo(t)
+	// A script, because a command line here is argv: no shell, no quoting.
+	os.WriteFile(filepath.Join(dir, "inside.sh"), []byte("#!/bin/sh\ntest -n \"$TRILHA_INSIDE\"\n"), 0o755)
+	commit(t, dir)
+	r, _ := New(dir)
+	r.Driver = driver.Echo{}
+	// `env` is a program: it sets what follows in the environment and runs
+	// it, which is the shape of `docker exec <container>`.
+	box := &wrapping{prefix: []string{"env", "TRILHA_INSIDE=1"}}
+	r.Sandbox = box
+	tk, _ := r.Store.Create("Sandboxed", func(x *task.Task) {
+		x.Status = task.Ready
+		x.Acceptance = []string{"it runs inside"}
+		x.Checks = []string{"sh inside.sh"}
+	})
+	res, err := r.Run(context.Background(), tk.ID)
+	if err != nil || !res.Passed {
+		t.Fatalf("%+v %v", res, err)
+	}
+	var ran string
+	for _, e := range res.Evidence {
+		if e.Kind == "check" {
+			ran = e.Command
+		}
+	}
+	if ran != "env TRILHA_INSIDE=1 sh inside.sh" {
+		t.Fatalf("the evidence does not say where it ran: %q", ran)
+	}
+	if !box.released {
+		t.Fatal("the sandbox was not released")
+	}
+	// The same check without the sandbox fails: the wrapping is what made it
+	// pass, so the test proves the wrapping and not the check.
+	r.Store.Move(tk.ID, task.Ready)
+	r.Sandbox = sandbox.None{}
+	if res, err := r.Run(context.Background(), tk.ID); err == nil || res.Passed {
+		t.Fatalf("%+v %v", res, err)
 	}
 }

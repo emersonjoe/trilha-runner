@@ -30,10 +30,12 @@ func (Exec) Execute(ctx context.Context, job Job) (Output, error) {
 	if command == "" && job.Agent != nil {
 		command = job.Agent.Command
 	}
-	args := task.SplitCommand(command)
-	if len(args) == 0 {
+	if len(task.SplitCommand(command)) == 0 {
 		return Output{}, errors.New("exec: no command: set `command:` in the agent manifest or pass --cmd")
 	}
+	// Inside a sandbox the program started on the host is the client that
+	// enters it; the agent's own command is its argument.
+	args := job.argv(command)
 	// The run's model access, when the control plane sent one, reaches the
 	// agent only here — as process environment — and a base URL outside the
 	// project's allowed hosts is refused before the agent starts.
@@ -44,17 +46,20 @@ func (Exec) Execute(ctx context.Context, job Job) (Output, error) {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = job.Dir
 	cmd.Stdin = strings.NewReader(job.Prompt)
-	cmd.Env = append(os.Environ(), append([]string{"TRILHA_TASK=" + job.Task.ID, "TRILHA_WORKTREE=" + job.Dir}, append(job.Env, access...)...)...)
+	cmd.Env = append(os.Environ(), append([]string{"TRILHA_TASK=" + job.Task.ID, "TRILHA_WORKTREE=" + job.workDir()}, append(job.Env, access...)...)...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err = cmd.Run()
 	o := Output{Text: Redact(tail(out.String()), job.Access.Secrets()), Meta: map[string]string{"driver": "exec", "command": command}}
+	if len(job.Prefix) > 0 {
+		o.Meta["sandbox"] = strings.Join(job.Prefix, " ")
+	}
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			o.Meta["exit_code"] = strconv.Itoa(ee.ExitCode())
-			return o, fmt.Errorf("exec: %s exited %d", args[0], ee.ExitCode())
+			return o, fmt.Errorf("exec: %s exited %d", command, ee.ExitCode())
 		}
 		return o, fmt.Errorf("exec: %w", err)
 	}

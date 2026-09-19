@@ -21,7 +21,9 @@ import (
 	"github.com/emersonjoe/trilha-runner/driver"
 	"github.com/emersonjoe/trilha-runner/queue"
 	"github.com/emersonjoe/trilha-runner/runner"
+	"github.com/emersonjoe/trilha-runner/sandbox"
 	"github.com/emersonjoe/trilha-runner/worktree"
+	"github.com/emersonjoe/trilha-spec/agent"
 )
 
 const version = "0.2.0"
@@ -31,6 +33,7 @@ const usage = `trilha-runner ` + version + ` — executes tasks of the Trilha pr
 usage: trilha-runner <command> [flags]
 
   run <task-id> [--driver exec|claude-code|ai|echo] [--cmd "claude -p -"] [--json]
+                [--sandbox docker]
                          run one ready task in its own worktree, verify, record evidence
   next [flags of run] [--repo trilha=../trilha]
                          run the first task that is ready with every dependency done,
@@ -42,6 +45,10 @@ usage: trilha-runner <command> [flags]
   worktree list | clean <task-id>
   drivers                the drivers available
   version
+
+--sandbox docker runs the agent and the checks inside a container with the services the
+agent manifest's "sandbox:" declares; the worktree is the only writable path that survives
+and the resource limits are the runner's, not the manifest's.
 
 --label declares what this host can do (repeatable; TRILHA_WORKER_LABELS) and --capacity how
 many runs it executes at once (TRILHA_WORKER_CAPACITY): both ride the heartbeat and the claim,
@@ -131,6 +138,48 @@ func newRunnerAt(path, drv, command string, out io.Writer) (*runner.Runner, erro
 	return r, nil
 }
 
+// withSandbox puts the runner in a container when the operator asked for
+// one. The manifest says what to build; the host says whether it may.
+func withSandbox(ctx context.Context, r *runner.Runner, name, agentName string) error {
+	switch name {
+	case "", "none":
+		return nil
+	case "docker":
+	default:
+		return fmt.Errorf("unknown sandbox %q (have none, docker)", name)
+	}
+	man, err := agentManifest(r, agentName)
+	if err != nil {
+		return err
+	}
+	spec, err := sandbox.FromAgent(man, r.Layout.Root)
+	if err != nil {
+		return fmt.Errorf("--sandbox docker: %w", err)
+	}
+	box := sandbox.Docker{Log: r.Log}
+	if err := box.Available(ctx); err != nil {
+		return err
+	}
+	r.Sandbox, r.SandboxSpec = box, spec
+	return nil
+}
+
+// agentManifest answers the manifest a run will use: the one named, or the
+// project's default.
+func agentManifest(r *runner.Runner, name string) (*agent.Agent, error) {
+	if name == "" {
+		proj, err := r.Layout.LoadProject()
+		if err != nil {
+			return nil, err
+		}
+		name = proj.DefaultAgent
+	}
+	if name == "" {
+		return nil, errors.New("no agent manifest: name one with --agent or set default_agent in project.md")
+	}
+	return agent.Load(r.Layout, name)
+}
+
 func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error {
 	fs := flags(cmd)
 	drv := fs.String("driver", "", "exec | claude-code | ai | echo (default: the agent manifest's)")
@@ -138,12 +187,17 @@ func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error
 	asJSON := fs.Bool("json", false, "print the result as JSON")
 	var repos repeated
 	fs.Var(&repos, "repo", "a sibling checkout for cross-repository dependencies, repeatable: alias=path")
+	box := fs.String("sandbox", os.Getenv("TRILHA_SANDBOX"), "none | docker (docker needs a sandbox: in the agent manifest)")
+	agentName := fs.String("agent", "", "the agent manifest whose sandbox to use (default: the project's)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	r, err := newRunner(*drv, *command, out)
 	if err != nil {
+		return err
+	}
+	if err := withSandbox(ctx, r, *box, *agentName); err != nil {
 		return err
 	}
 	var res *runner.Result

@@ -36,6 +36,8 @@ type Runner struct {
 	// Command overrides the manifest's command (exec driver).
 	Command string
 	Sandbox sandbox.Sandbox
+	// SandboxSpec is what the sandbox should build, from the agent manifest.
+	SandboxSpec *sandbox.Spec
 	// Access is the per-project model access the control plane delivered with
 	// this run, if any. The runner passes it to the driver and keeps it
 	// nowhere else.
@@ -148,14 +150,18 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	if sb == nil {
 		sb = sandbox.None{}
 	}
-	env, release, err := sb.Prepare(ctx, wt.Path)
+	env, release, err := sb.Prepare(ctx, sandbox.Request{Task: id, Dir: wt.Path, Env: r.access(), Spec: r.SandboxSpec})
 	if err != nil {
 		return fail("sandbox", err)
 	}
 	defer release()
+	if env.Inside() {
+		r.logf("sandbox %s: commands run in %s", sb.Name(), env.WorkDir)
+	}
 
 	r.logf("driver %s starting", drv.Name())
-	out, execErr := drv.Execute(ctx, driver.Job{Task: t, Agent: man, Prompt: pack.Markdown(), Dir: env.Dir, Command: r.Command, Env: env.Env, Access: r.Access})
+	out, execErr := drv.Execute(ctx, driver.Job{Task: t, Agent: man, Prompt: pack.Markdown(), Dir: env.Dir,
+		Command: r.Command, Env: env.Env, Access: r.Access, Prefix: env.Prefix, WorkDir: env.WorkDir})
 	res.Output = out.Text
 	logPath := filepath.Join(r.Layout.Runs(), id, "agent.log")
 	os.MkdirAll(filepath.Dir(logPath), 0o755)
@@ -183,7 +189,7 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	if _, err := r.Store.Move(id, task.Verify); err != nil {
 		return fail("verify", err)
 	}
-	v, err := task.RunChecks(ctx, r.Layout, t, env.Dir, r.By)
+	v, err := r.verify(ctx, t, env)
 	if err != nil {
 		return fail("verify", err)
 	}
@@ -231,6 +237,55 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 		return res, errors.New("verification failed")
 	}
 	return res, nil
+}
+
+// access answers the environment the run's model access adds, so a sandbox
+// can put it inside the container instead of on a command line. A refusal by
+// policy is left to the driver, which is where the run stops.
+func (r *Runner) access() []string {
+	env, err := r.Access.Env()
+	if err != nil {
+		return nil
+	}
+	return env
+}
+
+// verify runs the task's checks — then the project's — where the sandbox
+// says, and records one evidence per check. Without a sandbox that moves the
+// work, this is the protocol's own RunChecks, unchanged. With one, each
+// command is wrapped so it runs inside, and the evidence records the wrapped
+// line: what ran is what the record says.
+func (r *Runner) verify(ctx context.Context, t *task.Task, env sandbox.Env) (*task.Verification, error) {
+	if !env.Inside() {
+		return task.RunChecks(ctx, r.Layout, t, env.Dir, r.By)
+	}
+	proj, err := r.Layout.LoadProject()
+	if err != nil {
+		return nil, err
+	}
+	commands := append(append([]string(nil), t.Checks...), proj.Verify...)
+	v := &task.Verification{Task: t.ID, Passed: true}
+	if len(commands) == 0 {
+		v.Passed = false
+		e, p, err := task.Record(r.Layout, task.Evidence{Task: t.ID, Kind: "note", By: r.By, Dir: env.WorkDir,
+			Note: "no checks to run: add `checks:` to the task or `verify:` to project.md"})
+		if err != nil {
+			return nil, err
+		}
+		v.Evidence, v.Paths = append(v.Evidence, e), append(v.Paths, p)
+		return v, nil
+	}
+	for _, c := range commands {
+		e, p, err := task.Record(r.Layout, task.RunCheck(ctx, t.ID, env.Wrap(c), env.Dir, r.By))
+		if err != nil {
+			return nil, err
+		}
+		v.Evidence, v.Paths = append(v.Evidence, e), append(v.Paths, p)
+		if !e.Passed {
+			v.Passed = false
+		}
+	}
+	return v, nil
 }
 
 // Next runs the first executable task, or answers ErrNothing.

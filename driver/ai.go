@@ -70,7 +70,7 @@ func (d AI) Execute(ctx context.Context, job Job) (Output, error) {
 		tools = append(tools, writeFile(job.Dir))
 	}
 	if may("run") {
-		tools = append(tools, runCommand(job.Dir))
+		tools = append(tools, runCommand(job))
 	}
 	// The protocol itself, when its CLI is installed: the model can read the
 	// task, its dependencies and the evidence so far through the same MCP
@@ -189,11 +189,18 @@ func writeFile(root string) *ai.Tool {
 		}))
 }
 
-func runCommand(root string) *ai.Tool {
+// runCommand runs where the checks will: on the host in the worktree, or
+// inside the sandbox when one is in the way. A model that tested its change
+// somewhere other than where it is verified has proved nothing.
+func runCommand(job Job) *ai.Tool {
 	return ai.NewTool("run", "Run a command in the worktree (program and arguments; no shell — use `sh -c \"...\"` for pipes). Answers exit code and output.",
 		ai.Schema(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
 		ai.Typed(func(ctx context.Context, in struct{ Command string }) (string, error) {
-			e := task.RunCheck(ctx, "TASK-000", in.Command, root, "ai")
+			command := in.Command
+			if len(job.Prefix) > 0 {
+				command = strings.Join(job.Prefix, " ") + " " + command
+			}
+			e := task.RunCheck(ctx, "TASK-000", command, job.Dir, "ai")
 			out, _ := json.Marshal(map[string]any{"exit_code": e.ExitCode, "output": e.Output, "note": e.Note})
 			return string(out), nil
 		}))
