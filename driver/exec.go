@@ -19,6 +19,30 @@ import (
 // worktree and the checks are the fence.
 type Exec struct{}
 
+// ClaudeCode is the fixed, auditable Claude Code preset. The control plane
+// chooses credentials, never argv.
+type ClaudeCode struct{}
+
+func (ClaudeCode) Name() string { return "claude-code" }
+
+func (ClaudeCode) Execute(ctx context.Context, job Job) (Output, error) {
+	job.Command = "claude -p -"
+	if job.AI != nil && job.AI.Credential != "" {
+		name := "ANTHROPIC_API_KEY"
+		if strings.Contains(strings.ToLower(job.AI.Provider), "oauth") {
+			name = "CLAUDE_CODE_OAUTH_TOKEN"
+		}
+		job.Env = append(job.Env, name+"="+job.AI.Credential)
+	}
+	output, err := (Exec{}).Execute(ctx, job)
+	if output.Meta == nil {
+		output.Meta = map[string]string{}
+	}
+	output.Meta["driver"] = "claude-code"
+	output.Meta["command"] = "claude -p -"
+	return output, err
+}
+
 // Name is "exec".
 func (Exec) Name() string { return "exec" }
 
@@ -34,15 +58,32 @@ func (Exec) Execute(ctx context.Context, job Job) (Output, error) {
 	if len(args) == 0 {
 		return Output{}, errors.New("exec: no command: set `command:` in the agent manifest or pass --cmd")
 	}
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	runtimeDir := job.Dir
+	if len(job.Prefix) > 0 {
+		runtimeDir = "/workspace"
+	}
+	innerEnvironment := append([]string{"TRILHA_TASK=" + job.Task.ID, "TRILHA_WORKTREE=" + runtimeDir}, job.Env...)
+	program, commandArgs := args[0], args[1:]
+	if len(job.Prefix) > 0 {
+		program = job.Prefix[0]
+		commandArgs = append(append(append([]string(nil), job.Prefix[1:]...), innerEnvironment...), args...)
+	}
+	cmd := exec.CommandContext(ctx, program, commandArgs...)
 	cmd.Dir = job.Dir
 	cmd.Stdin = strings.NewReader(job.Prompt)
-	cmd.Env = append(os.Environ(), append([]string{"TRILHA_TASK=" + job.Task.ID, "TRILHA_WORKTREE=" + job.Dir}, job.Env...)...)
+	cmd.Env = execEnvironment()
+	if len(job.Prefix) == 0 {
+		cmd.Env = append(cmd.Env, innerEnvironment...)
+	}
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
-	o := Output{Text: tail(out.String()), Meta: map[string]string{"driver": "exec", "command": command}}
+	secret := ""
+	if job.AI != nil {
+		secret = job.AI.Credential
+	}
+	o := Output{Text: tail(redactSecrets(out.String(), secret)), Meta: map[string]string{"driver": "exec", "command": command}}
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
@@ -53,4 +94,15 @@ func (Exec) Execute(ctx context.Context, job Job) (Output, error) {
 	}
 	o.Meta["exit_code"] = "0"
 	return o, nil
+}
+
+func execEnvironment() []string {
+	allowed := []string{"PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "CGO_ENABLED", "GOCACHE", "GOMODCACHE", "GOPATH", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN", "SSL_CERT_FILE", "SSL_CERT_DIR"}
+	environment := make([]string, 0, len(allowed))
+	for _, name := range allowed {
+		if value, ok := os.LookupEnv(name); ok {
+			environment = append(environment, name+"="+value)
+		}
+	}
+	return environment
 }

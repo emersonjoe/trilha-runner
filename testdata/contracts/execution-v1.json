@@ -1,0 +1,63 @@
+{
+  "protocol_version": "trilha.execution/v1",
+  "id": "run-000006",
+  "project": "checkout",
+  "task_id": "TASK-001",
+  "status": "review",
+  "phase": "awaiting_review",
+  "progress": 100,
+  "attempt": 2,
+  "max_attempts": 3,
+  "retry_of": "run-000005",
+  "repair_reason": "repair failed validation",
+  "created": "2026-09-14T12:00:00Z",
+  "started": "2026-09-14T12:00:01Z",
+  "finished": "2026-09-14T12:00:09Z",
+  "attempts": [
+    {
+      "number": 1,
+      "status": "recovered",
+      "failure_class": "provider_transient",
+      "error_code": "AI_PROVIDER_TEMPORARY_FAILURE",
+      "model": "gpt-5",
+      "total_tokens": 1200,
+      "started": "2026-09-14T12:00:01Z",
+      "finished": "2026-09-14T12:00:03Z"
+    },
+    {
+      "number": 2,
+      "status": "passed",
+      "model": "gpt-5",
+      "total_tokens": 3000,
+      "started": "2026-09-14T12:00:04Z",
+      "finished": "2026-09-14T12:00:09Z"
+    }
+  ],
+  "result": {
+    "passed": true,
+    "status": "review",
+    "branch": "trilha/task-001",
+    "commit": "abc123",
+    "attempt": 2,
+    "retry_of": "run-000005",
+    "repair_reason": "repair failed validation",
+    "model": "gpt-5",
+    "input_tokens": 3000,
+    "output_tokens": 1200,
+    "total_tokens": 4200,
+    "estimated_cost": 0.021,
+    "duration_ms": 8000,
+    "files_changed": ["app/page.go"],
+    "diff_summary": "app/page.go | 12 ++++++++++++",
+    "agent_report": "Checkout repaired",
+    "evidence": [
+      {
+        "task": "TASK-001",
+        "kind": "check",
+        "by": "trilha-runner",
+        "command": "go test ./...",
+        "passed": true
+      }
+    ]
+  }
+}
