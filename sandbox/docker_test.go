@@ -30,6 +30,10 @@ func TestFromAgent(t *testing.T) {
 
 func TestDockerPostgresAndTeardown(t *testing.T) {
 	if err := exec.Command("docker", "info").Run(); err != nil {
+		// CI sets TRILHA_REQUIRE_DOCKER so this case cannot pass by not running.
+		if os.Getenv("TRILHA_REQUIRE_DOCKER") == "1" {
+			t.Fatalf("Docker is unavailable and TRILHA_REQUIRE_DOCKER=1: %v", err)
+		}
 		t.Skip("Docker is unavailable")
 	}
 	ctx := context.Background()

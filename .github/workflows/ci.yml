@@ -22,7 +22,22 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
       # gofmt + go vet + go test, the same command as locally (docs/testing.md).
+      # On GitHub-hosted runners (every pull request) the Docker case must run;
+      # the self-hosted runner reports it as skipped in the test report instead.
       - run: make test
+        env:
+          TRILHA_REQUIRE_DOCKER: ${{ runner.environment == 'github-hosted' && '1' || '0' }}
+      - name: Test report
+        if: matrix.go == '1.25'
+        env:
+          TRILHA_REQUIRE_DOCKER: ${{ runner.environment == 'github-hosted' && '1' || '0' }}
+        run: |
+          set +e
+          make -s report > report.md
+          status=$?
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          cat report.md
+          exit $status
       - name: Remove job caches
         if: always() && runner.environment == 'self-hosted'
         run: |
@@ -39,3 +54,17 @@ jobs:
         with:
           go-version: "1.25"
       - run: make race
+        env:
+          TRILHA_REQUIRE_DOCKER: ${{ runner.environment == 'github-hosted' && '1' || '0' }}
+  # Maintainers run the runner on macOS: the binary end to end and the
+  # packages that drive real git run there too (no Docker on macOS runners).
+  host:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25"
+      - run: make host

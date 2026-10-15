@@ -23,6 +23,16 @@ This project follows semantic versioning.
 
 ### Added
 
+- IBM's seven end-to-end testing practices, applied (`docs/testing.md`): every case in the
+  journey catalog states resources, preconditions, data, steps and expected; `internal/catalog`
+  fails the suite when a case is incomplete, cites a missing test, a test belongs to no case,
+  the locales differ, or a fixture holds a real-looking e-mail, token or host. `make report`
+  (`internal/testreport`) summarizes passed/failed/skipped, skip reasons, the slowest tests
+  and coverage per package, and fails below `testdata/coverage-floor.txt`; CI shows it in the
+  job summary. CI requires Docker on GitHub-hosted runners (`TRILHA_REQUIRE_DOCKER`), runs the
+  binary and git packages on macOS (`make host`), and `nightly.yml` runs `make flaky` every
+  night. A pull request template asks for journey, cases, tests per level, numbers, what was
+  not tested and the acceptance in business words.
 - Tests for the gaps the journey catalog listed: the Cloud client for bundles, progress and
   deployments; the worker's cross-project dependency check; the bundle checkout, divergent
   files and branch publishing; loading delivery profiles (including the shipped example); and

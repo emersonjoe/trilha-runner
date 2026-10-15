@@ -3,3 +3,5 @@ bin/
 coverage.out
 /trilha-runner
 *.exe
+test.json
+report.md
