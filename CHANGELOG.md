@@ -2,6 +2,36 @@
 
 This project follows semantic versioning.
 
+## Unreleased
+
+### Fixed
+
+- A run that could not start because the project is not a git repository, or because the
+  agent manifest names an unknown driver, returned an error and left the task `ready` with no
+  evidence — against principle III and what the README promised. The task now goes
+  `ready → running → failed` with a `run` record of stage `worktree` or `driver`, like a
+  missing `exec` command already did. A task that is not `ready` or is blocked by a dependency
+  is still left untouched. The note no longer repeats the stage (`worktree: worktree: …`), and
+  `run`/`next` print no empty `branch` line when no worktree was created.
+- A worker with `--push` could publish a branch only once. Its checkout is a single-branch
+  clone, so a push left no remote-tracking ref, and the next `--force-with-lease` on the same
+  branch expected it not to exist and was refused as stale: the second task of a round failed
+  to publish the spec branch, and a rerun failed to publish its task branch. The checkout now
+  tracks `refs/heads/trilha/*`, so each push records what the runner published and the next
+  one is refused only when someone else moved the branch. A checkout cloned by an earlier
+  version adopts the branches already on the remote the first time it is reused.
+
+### Added
+
+- Tests for the gaps the journey catalog listed: the Cloud client for bundles, progress and
+  deployments; the worker's cross-project dependency check; the bundle checkout, divergent
+  files and branch publishing; loading delivery profiles (including the shipped example); and
+  the attempt loop retrying a transient provider failure through `Runner.Run`.
+- A testing standard (constitution principle VII, `docs/testing.md`) and a catalog of user
+  journeys with their test cases (`docs/journeys.md`); `make ci`, `make flaky`, `make e2e` and
+  `make cover`. Tests for `worktree`, `internal/taskcompat`, cross-repository dependency rules,
+  the retry policy and a failing agent through the CLI binary.
+
 ## 0.4.0 — 2026-09-19
 
 ### Added
