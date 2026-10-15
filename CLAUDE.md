@@ -9,6 +9,15 @@ shell commands, and other important information, read the current plan
 
 - `make test` — gofmt + `go vet ./...` + `go test ./...` (runner tests create real git repos; the CLI e2e builds the binary).
 - `make build` — `bin/trilha-runner`.
+- `make ci` — what CI runs (`test` + `race`). `make flaky` (shuffled ×3 with `-race`), `make e2e`, `make cover`.
+
+## Testing (constitution VII, `docs/testing.md`)
+
+- Name the journey and its worst impact first; add or update its case in `docs/journeys.md` **and** `docs/journeys.pt-BR.md` in the same change, pointing at the test that automates it.
+- Pyramid: rules and edges in unit tests; git, the cloud HTTP contract, the protocol and Docker in integration tests; the CLI binary (`cmd/trilha-runner/e2e_test.go`) only for critical journeys.
+- A bug fix starts with a regression test that fails on the current code.
+- Synthetic data only. No `t.Skip` to hide a flaky test — fix it or open a `bug` issue with an owner.
+- Before saying a change is done, run `make ci` and report passed/failed/skipped, plus what was left untested and why.
 
 ## Structure
 

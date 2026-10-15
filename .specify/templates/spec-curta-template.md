@@ -35,19 +35,21 @@ mudança não é pequena e pede a forma completa).
 
 | Princípio | Como respeita |
 |---|---|
-| II — só biblioteca padrão | |
-| VI — teste primeiro | |
-| VII — segurança por padrão | |
+| II — a cópia de trabalho é sagrada | |
+| III — evidência sempre, inclusive na falha | |
+| VI — testável sem rede | |
+| VII — teste pela jornada e pelo risco | jornada Jn, pior impacto, caso em `docs/journeys.md` |
 
 ## Tarefas
 
 Teste antes do código, em ordem de execução. Uma rodada de `make test` por bloco, não por
 arquivo.
 
-- [ ] T001 Teste que falha: <o que ele prova>
-- [ ] T002 Implementação
-- [ ] T003 Uso em `examples/<app>`
-- [ ] T004 Documentação nas duas locales (`en/` e `pt/`) + referência
+- [ ] T001 Caso no catálogo (`docs/journeys.md` e `docs/journeys.pt-BR.md`): título, pré-condições, dados, passos, esperado
+- [ ] T002 Teste que falha: <o que ele prova> (unidade/integração; ponta a ponta só se a jornada é crítica)
+- [ ] T003 Implementação
+- [ ] T004 `make ci` verde; números (passaram/falharam/pulados) e o que ficou sem teste
+- [ ] T005 README nas duas línguas + capítulo hands-on, se mudou o que o usuário digita ou vê
 - [ ] T005 `CHANGELOG.md`, `version` em `cmd/trilha/main.go`, item do `ROADMAP.md`
 - [ ] T006 `make test` verde e `scripts/release.sh X.Y.Z --issues "NN"`
 

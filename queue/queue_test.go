@@ -135,3 +135,51 @@ func TestRemoteDependencyStatus(t *testing.T) {
 		t.Fatalf("item=%+v err=%v", item, err)
 	}
 }
+
+func TestParseRepository(t *testing.T) {
+	cases := []struct {
+		value, alias, path string
+		ok                 bool
+	}{
+		{"trilha=../trilha", "trilha", "../trilha", true},
+		{" spec = /src/trilha-spec ", "spec", "/src/trilha-spec", true},
+		{"trilha", "", "", false},
+		{"=../trilha", "", "", false},
+		{"trilha=", "", "", false},
+		{"a:b=../x", "", "", false},
+	}
+	for _, c := range cases {
+		alias, path, err := ParseRepository(c.value)
+		if (err == nil) != c.ok || alias != c.alias || path != c.path {
+			t.Errorf("ParseRepository(%q) = %q, %q, %v", c.value, alias, path, err)
+		}
+	}
+}
+
+func TestBlocker(t *testing.T) {
+	layout, _, err := spec.Init(t.TempDir(), spec.InitOptions{Name: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &task.Store{Layout: layout}
+	first, _ := store.Create("first", func(item *task.Task) { item.Status = task.Ready; item.Acceptance = []string{"ok"} })
+	second, _ := store.Create("second", func(item *task.Task) {
+		item.Status = task.Ready
+		item.Acceptance = []string{"ok"}
+		item.DependsOn = []string{first.ID}
+	})
+	q := Local{Store: store}
+	if blocked, err := q.Blocker(second); err != nil || blocked != first.ID {
+		t.Fatalf("local dependency not done: %q %v", blocked, err)
+	}
+	if blocked, err := q.Blocker(first); err != nil || blocked != "" {
+		t.Fatalf("no dependency: %q %v", blocked, err)
+	}
+
+	// An alias that points nowhere waits instead of failing.
+	second.DependsOn = []string{"trilha:TASK-001"}
+	q.Repositories = map[string]string{"trilha": t.TempDir()}
+	if blocked, err := q.Blocker(second); err != nil || blocked != "waiting:trilha:TASK-001" {
+		t.Fatalf("missing sibling: %q %v", blocked, err)
+	}
+}

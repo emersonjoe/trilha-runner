@@ -33,6 +33,17 @@ Cliente de modelo, loop de agente e cliente MCP vêm de `github.com/emersonjoe/t
 O driver `echo` e o `Local` queue permitem testar o pipeline inteiro com `go test`, sem chave
 nem rede. Todo caminho do `Runner.Run` tem teste que o percorre.
 
+### VII. Teste pela jornada e pelo risco
+Toda mudança de comportamento nomeia a jornada que toca e o pior impacto se quebrar, e
+atualiza o catálogo `docs/journeys.md` (e `docs/journeys.pt-BR.md`) com o caso: título,
+pré-condições, dados, passos, resultado esperado e o teste que o automatiza. Pirâmide, não só
+ponta a ponta: regra, borda e exceção em teste de unidade; fronteira (git, HTTP do cloud,
+protocolo, Docker) em integração; o binário da CLI em poucos casos ponta a ponta, um por
+jornada crítica. Bug corrigido ganha teste de regressão que falha antes da correção. Dados de
+teste são sintéticos — nunca dado pessoal, token ou repositório real. A suíte inteira roda com
+um comando (`make ci`) e no CI; teste instável não é pulado em silêncio: corrige-se a causa ou
+abre-se issue com dono. Detalhes em `docs/testing.md`.
+
 ## Idioma
 
 Código e documentação pública em inglês, `README.pt-BR.md` no mesmo commit. Specs e esta
@@ -43,7 +54,7 @@ constituição em português do Brasil.
 Spec em `specs/NNN-nome/` (spec-kit) e task em `.trilha/tasks/` do próprio repositório; o
 runner roda as próprias tasks. Spec curta para mudança pequena.
 
-**Version**: 1.0.0 | **Ratified**: 2026-09-12 | **Last Amended**: 2026-09-12
+**Version**: 1.1.0 | **Ratified**: 2026-09-12 | **Last Amended**: 2026-10-05
 
 ## Capítulo hands-on
 
