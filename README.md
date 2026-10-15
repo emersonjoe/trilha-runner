@@ -59,8 +59,9 @@ Each run leaves in `.trilha/evidence/TASK-NNN/`:
 - one `run` record — driver, branch, commit, diff stat, model/turns/tokens when the driver
   knows them, the tail of the agent's output, and a pointer to `.trilha/runs/TASK-NNN/agent.log`.
 
-A failed start (no command, not a git repository, agent exited non-zero) is a `run` record
-with the stage that failed, and the task goes to `failed`.
+A failed start (not a git repository, an unknown driver, no command, agent exited non-zero) is
+a `run` record with the stage that failed, and the task goes to `failed`. A task that is not
+`ready`, or still waits on a dependency, is not run and stays as it was.
 
 ## Worker: the bridge to trilha-cloud
 
@@ -138,6 +139,13 @@ safe at the same time:
 
 Depends on `trilha-spec` (the protocol) and on the `ai` and `ai/mcp` packages of the `trilha`
 framework — nothing outside the Go standard library beyond those two modules.
+
+## Testing
+
+`make ci` runs what CI runs: gofmt, `go vet`, the whole suite and the race detector — with no
+network and no key, using the `echo` driver and real git repositories in temporary
+directories. How the suite is organized, and the user journeys each test proves, are in
+[docs/testing.md](docs/testing.md) and [docs/journeys.md](docs/journeys.md).
 
 ## License
 

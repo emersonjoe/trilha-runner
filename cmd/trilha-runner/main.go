@@ -173,7 +173,9 @@ func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error
 
 func printResult(out io.Writer, res *runner.Result) {
 	fmt.Fprintf(out, "%s → %s (driver %s, %s)\n", res.Task, res.Status, res.Driver, res.Elapsed.Round(time.Millisecond))
-	fmt.Fprintf(out, "branch %s in %s\n", res.Branch, res.Worktree)
+	if res.Branch != "" {
+		fmt.Fprintf(out, "branch %s in %s\n", res.Branch, res.Worktree)
+	}
 	if res.Commit != "" {
 		fmt.Fprintf(out, "commit %s\n", res.Commit)
 	}
