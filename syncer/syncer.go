@@ -72,7 +72,36 @@ func EnsureRepository(ctx context.Context, root, project, remote, defaultBranch 
 			return Repository{}, err
 		}
 	}
+	if err := trackRunnerBranches(ctx, path); err != nil {
+		return Repository{}, err
+	}
 	return Repository{Path: path, DefaultBranch: defaultBranch}, nil
+}
+
+// runnerBranches maps the branches the runner publishes (trilha/spec-…,
+// trilha/task-…) to remote-tracking refs. The checkout is a single-branch
+// clone, so without it a push records nothing, and the next
+// --force-with-lease on the same branch expects it not to exist and is
+// refused as stale. With it, each push records what the runner published,
+// and the next one is refused only when someone else moved the branch.
+const runnerBranches = "+refs/heads/trilha/*:refs/remotes/origin/trilha/*"
+
+// trackRunnerBranches adds the refspec once. A checkout cloned before it
+// existed may already have published branches with no tracking ref, which
+// every later push would be refused against; the one fetch that comes with
+// adding the refspec adopts them.
+func trackRunnerBranches(ctx context.Context, path string) error {
+	configured, _ := git(ctx, path, "config", "--get-all", "remote.origin.fetch")
+	for _, line := range strings.Split(configured, "\n") {
+		if strings.TrimSpace(line) == runnerBranches {
+			return nil
+		}
+	}
+	if _, err := git(ctx, path, "config", "--add", "remote.origin.fetch", runnerBranches); err != nil {
+		return err
+	}
+	_, err := git(ctx, path, "fetch", "origin", runnerBranches)
+	return err
 }
 
 // Materialize writes a versioned bundle through the trilha-spec libraries and

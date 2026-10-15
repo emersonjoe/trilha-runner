@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emersonjoe/trilha-runner/driver"
 	"github.com/emersonjoe/trilha-spec/spec"
@@ -92,6 +93,7 @@ func TestRunFailsChecks(t *testing.T) {
 	dir := repo(t)
 	r, _ := New(dir)
 	r.Driver = driver.Echo{}
+	r.RetryBase = time.Millisecond // three attempts, not three real backoffs
 	tk, _ := r.Store.Create("Impossible", func(x *task.Task) {
 		x.Status = task.Ready
 		x.Acceptance = []string{"never"}
@@ -143,5 +145,90 @@ func TestPolicyFailureIsRecordedWithoutRetry(t *testing.T) {
 	evidence, _ := task.ListEvidence(runner.Layout, item.ID)
 	if len(evidence) != 1 || evidence[0].Meta["stage"] != "policy" || strings.Contains(evidence[0].Note, "secret") {
 		t.Fatalf("evidence=%+v", evidence)
+	}
+}
+
+func TestExecWithoutCommandIsRecorded(t *testing.T) {
+	dir := repo(t)
+	r, _ := New(dir)
+	tk, _ := r.Store.Create("No command", func(x *task.Task) { x.Status = task.Ready; x.Acceptance = []string{"x"}; x.Checks = []string{"true"} })
+	res, err := r.Run(context.Background(), tk.ID)
+	if err == nil || !strings.Contains(err.Error(), "no command") || res.Status != task.Failed || res.Attempt != 1 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	ev, _ := task.ListEvidence(r.Layout, tk.ID)
+	if len(ev) != 1 || ev[0].Meta["stage"] != "execution" || ev[0].Meta["driver"] != "exec" {
+		t.Fatalf("evidence = %+v", ev)
+	}
+}
+
+// A run that cannot even start still ends with evidence and a failed task
+// (principle III): the maintainer finds out why in .trilha/evidence, not
+// only in a terminal that may be gone.
+func TestNotAGitRepositoryIsRecorded(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, err := spec.Init(dir, spec.InitOptions{Name: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := New(dir)
+	r.Driver = driver.Echo{}
+	tk, _ := r.Store.Create("No git", func(x *task.Task) { x.Status = task.Ready; x.Acceptance = []string{"x"}; x.Checks = []string{"true"} })
+	res, err := r.Run(context.Background(), tk.ID)
+	if err == nil || !strings.Contains(err.Error(), "git repository") || res == nil || res.Status != task.Failed || res.Driver != "echo" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	ev, _ := task.ListEvidence(r.Layout, tk.ID)
+	if len(ev) != 1 || ev[0].Kind != "run" || ev[0].Meta["stage"] != "worktree" || ev[0].Meta["driver"] != "echo" || !strings.HasPrefix(ev[0].Note, "worktree: the project must be a git repository") {
+		t.Fatalf("evidence = %+v", ev)
+	}
+	if got, _ := r.Store.Get(tk.ID); got.Status != task.Failed {
+		t.Fatalf("status = %s", got.Status)
+	}
+	if _, err := os.Stat(filepath.Join(r.Layout.Runs(), tk.ID, "wt")); !os.IsNotExist(err) {
+		t.Fatalf("a worktree was attempted: %v", err)
+	}
+}
+
+func TestUnknownDriverIsRecorded(t *testing.T) {
+	dir := repo(t)
+	r, _ := New(dir)
+	os.MkdirAll(r.Layout.Agents(), 0o755)
+	os.WriteFile(r.Layout.AgentFile("dev"), []byte("---\nname: dev\nrole: developer\ndriver: nope\n---\n"), 0o644)
+	tk, _ := r.Store.Create("Unknown driver", func(x *task.Task) {
+		x.Status = task.Ready
+		x.Agent = "dev"
+		x.Acceptance = []string{"x"}
+		x.Checks = []string{"true"}
+	})
+	res, err := r.Run(context.Background(), tk.ID)
+	if err == nil || !strings.Contains(err.Error(), "nope") || res == nil || res.Status != task.Failed || res.Driver != "nope" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	ev, _ := task.ListEvidence(r.Layout, tk.ID)
+	if len(ev) != 1 || ev[0].Meta["stage"] != "driver" || ev[0].Meta["driver"] != "nope" || strings.HasPrefix(ev[0].Note, "driver: driver:") {
+		t.Fatalf("evidence = %+v", ev)
+	}
+}
+
+// A task blocked by a dependency did not fail: it is not run, and it stays
+// ready with no evidence.
+func TestBlockedTaskIsNotFailed(t *testing.T) {
+	dir := repo(t)
+	r, _ := New(dir)
+	r.Driver = driver.Echo{}
+	first, _ := r.Store.Create("First", func(x *task.Task) { x.Status = task.Ready; x.Acceptance = []string{"x"} })
+	second, _ := r.Store.Create("Second", func(x *task.Task) {
+		x.Status = task.Ready
+		x.Acceptance = []string{"x"}
+		x.DependsOn = []string{first.ID}
+	})
+	if res, err := r.Run(context.Background(), second.ID); err == nil || res != nil {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if ev, _ := task.ListEvidence(r.Layout, second.ID); len(ev) != 0 {
+		t.Fatalf("evidence = %+v", ev)
+	}
+	if got, _ := r.Store.Get(second.ID); got.Status != task.Ready {
+		t.Fatalf("status = %s", got.Status)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/emersonjoe/trilha-runner/driver"
@@ -42,10 +43,28 @@ type Runner struct {
 	By string
 	// Log receives progress lines; nil discards them.
 	Log func(string)
+	// Progress receives structured phase changes; nil discards them.
+	Progress func(Event)
 	// MaxAttempts includes the first attempt. Default: 3.
 	MaxAttempts int
 	// RetryBase is the first exponential-backoff delay. Default: 1 second.
 	RetryBase time.Duration
+}
+
+// Event is a structured progress notification about a run's phase, emitted
+// alongside (never parsed from) Log lines so a caller — a worker reporting
+// to trilha-cloud — can follow a run without scraping text.
+type Event struct {
+	Phase       string
+	Message     string
+	Attempt     int
+	MaxAttempts int
+	Branch      string
+	Model       string
+	// AttemptStatus, when set, closes out an attempt ("passed" or "failed").
+	AttemptStatus string
+	FailureClass  string
+	ErrorCode     string
 }
 
 // Attempt is one provider or corrective execution inside a logical run.
@@ -102,10 +121,18 @@ func (r *Runner) logf(format string, args ...any) {
 	}
 }
 
+func (r *Runner) progress(e Event) {
+	if r.Progress != nil {
+		r.Progress(e)
+	}
+}
+
 // Run executes one task. The task must be ready with every dependency
 // done; the runner moves it to running, and at the end to review (checks
-// passed) or failed. A failure to even start — no driver, no git — leaves
-// the task where it was.
+// passed) or failed. A run that cannot even start — an unknown driver, a
+// project that is not a git repository — still ends failed, with a run
+// record naming the stage. A task that is not ready, or is blocked by a
+// dependency, is not run and is left where it was.
 func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	start := time.Now()
 	t, err := taskcompat.Get(r.Store, id)
@@ -125,20 +152,6 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 			return nil, err
 		}
 	}
-	drv := r.Driver
-	if drv == nil {
-		name := "exec"
-		if man != nil && man.Driver != "" {
-			name = man.Driver
-		}
-		if drv, err = driver.New(name); err != nil {
-			return nil, err
-		}
-	}
-	wm := worktree.Manager{Layout: r.Layout}
-	if err := wm.IsRepo(ctx); err != nil {
-		return nil, err
-	}
 	pack, err := buildContextPack(r.Layout, t, proj, man)
 	if err != nil {
 		return nil, err
@@ -146,15 +159,36 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	if err := r.moveRunning(t); err != nil {
 		return nil, err
 	}
-	res := &Result{ProtocolVersion: "trilha.execution/v1", Task: id, Driver: drv.Name()}
+	res := &Result{ProtocolVersion: "trilha.execution/v1", Task: id}
 	fail := func(stage string, cause error) (*Result, error) {
-		r.logf("%s: %v", stage, cause)
-		task.Record(r.Layout, task.Evidence{Task: id, Kind: "run", By: r.By, Note: stage + ": " + cause.Error(), Meta: map[string]string{"driver": drv.Name(), "stage": stage}})
+		note := cause.Error()
+		if !strings.HasPrefix(note, stage+": ") {
+			note = stage + ": " + note
+		}
+		r.logf("%s", note)
+		task.Record(r.Layout, task.Evidence{Task: id, Kind: "run", By: r.By, Note: note, Meta: map[string]string{"driver": res.Driver, "stage": stage}})
 		if err := taskcompat.Move(r.Store, t, task.Failed); err == nil {
 			res.Status = task.Failed
 		}
 		res.Elapsed = time.Since(start)
 		return res, cause
+	}
+
+	drv := r.Driver
+	if drv == nil {
+		name := "exec"
+		if man != nil && man.Driver != "" {
+			name = man.Driver
+		}
+		res.Driver = name
+		if drv, err = driver.New(name); err != nil {
+			return fail("driver", err)
+		}
+	}
+	res.Driver = drv.Name()
+	wm := worktree.Manager{Layout: r.Layout}
+	if err := wm.IsRepo(ctx); err != nil {
+		return fail("worktree", err)
 	}
 
 	wt, err := wm.Create(ctx, id)
@@ -163,6 +197,7 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	}
 	res.Branch, res.Worktree = wt.Branch, wt.Path
 	r.logf("worktree %s on %s", wt.Path, wt.Branch)
+	r.progress(Event{Phase: "creating_worktree", Branch: wt.Branch})
 
 	sb := r.Sandbox
 	if sb == nil {

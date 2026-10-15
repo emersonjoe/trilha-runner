@@ -23,7 +23,7 @@ import (
 	"github.com/emersonjoe/trilha-runner/worktree"
 )
 
-const version = "0.3.2"
+const version = "0.4.0"
 
 const usage = `trilha-runner ` + version + ` — executes tasks of the Trilha protocol
 
@@ -173,7 +173,9 @@ func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error
 
 func printResult(out io.Writer, res *runner.Result) {
 	fmt.Fprintf(out, "%s → %s (driver %s, %s)\n", res.Task, res.Status, res.Driver, res.Elapsed.Round(time.Millisecond))
-	fmt.Fprintf(out, "branch %s in %s\n", res.Branch, res.Worktree)
+	if res.Branch != "" {
+		fmt.Fprintf(out, "branch %s in %s\n", res.Branch, res.Worktree)
+	}
 	if res.Commit != "" {
 		fmt.Fprintf(out, "commit %s\n", res.Commit)
 	}
@@ -227,22 +229,27 @@ func cmdWorker(ctx context.Context, args []string, out io.Writer) error {
 	if *capacity < 1 {
 		return errors.New("worker capacity must be at least 1")
 	}
+	versions := map[string]string{}
+	for _, name := range driver.Names() {
+		versions[name] = version
+	}
+	// q is built before newRunner so a startup failure — missing .trilha/,
+	// a bad delivery config — has somewhere to report itself: the fleet
+	// panel otherwise just sees the last good heartbeat and calls it fine.
+	q := queue.Remote{BaseURL: strings.TrimSuffix(*cloud, "/"), Token: *token, Worker: *name, Project: *project, Capabilities: queue.Capabilities{Labels: labels, Capacity: *capacity, RunnerVersion: version, DriverVersions: versions}}
 	r, err := newRunner(*drv, *command, out)
 	if err != nil {
+		_ = q.Heartbeat(ctx, "failed", err.Error())
 		return err
 	}
 	r.MaxAttempts = *attempts
 	r.RetryBase = *retryBase
 	r.By = "trilha-runner worker " + *name
-	versions := map[string]string{}
-	for _, name := range driver.Names() {
-		versions[name] = version
-	}
-	q := queue.Remote{BaseURL: strings.TrimSuffix(*cloud, "/"), Token: *token, Worker: *name, Project: *project, Capabilities: queue.Capabilities{Labels: labels, Capacity: *capacity, RunnerVersion: version, DriverVersions: versions}}
 	var delivery deployer.Config
 	if *deployConfig != "" {
 		delivery, err = deployer.Load(*deployConfig)
 		if err != nil {
+			_ = q.Heartbeat(ctx, "failed", err.Error())
 			return err
 		}
 	}

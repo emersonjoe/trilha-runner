@@ -60,8 +60,9 @@ Cada execução deixa em `.trilha/evidence/TASK-NNN/`:
 - um registro `run` — driver, branch, commit, diff stat, modelo/turnos/tokens quando o driver
   sabe, o fim da saída do agente e um ponteiro para `.trilha/runs/TASK-NNN/agent.log`.
 
-Uma partida que falha (sem comando, sem repositório git, agente saiu com erro) é um registro
-`run` com o estágio que falhou, e a task vai para `failed`.
+Uma partida que falha (sem repositório git, driver desconhecido, sem comando, agente saiu com
+erro) é um registro `run` com o estágio que falhou, e a task vai para `failed`. Uma task que não
+está `ready`, ou ainda espera uma dependência, não roda e fica como estava.
 
 ## Worker: a ponte para o trilha-cloud
 
@@ -138,6 +139,13 @@ seguro ao mesmo tempo:
 
 Depende do `trilha-spec` (o protocolo) e dos pacotes `ai` e `ai/mcp` do framework `trilha` —
 nada fora da biblioteca padrão do Go além desses dois módulos.
+
+## Testes
+
+`make ci` roda o que o CI roda: gofmt, `go vet`, a suíte inteira e o detector de corrida —
+sem rede nem chave, com o driver `echo` e repositórios git reais em diretórios temporários.
+Como a suíte se organiza, e as jornadas de usuário que cada teste prova, estão em
+[docs/testing.pt-BR.md](docs/testing.pt-BR.md) e [docs/journeys.pt-BR.md](docs/journeys.pt-BR.md).
 
 ## Licença
 

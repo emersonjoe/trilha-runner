@@ -161,14 +161,22 @@ func (r Remote) Bundle(ctx context.Context, item Item) (Bundle, error) {
 	return bundle, nil
 }
 
-// Heartbeat tells the control plane this worker is alive and what it is doing.
-func (r Remote) Heartbeat(ctx context.Context, status string) error {
+// Heartbeat tells the control plane this worker is alive and what it is
+// doing. errorText is variadic so every existing call site is unchanged; the
+// control plane only reads the first value, sent whenever it is non-empty
+// (typically alongside status "failed" or "stopping").
+func (r Remote) Heartbeat(ctx context.Context, status string, errorText ...string) error {
+	var errText string
+	if len(errorText) > 0 {
+		errText = errorText[0]
+	}
 	payload := struct {
 		Name    string `json:"name"`
 		Project string `json:"project"`
 		Status  string `json:"status"`
+		Error   string `json:"error,omitempty"`
 		Capabilities
-	}{Name: r.Worker, Project: r.Project, Status: status, Capabilities: r.normalizedCapabilities()}
+	}{Name: r.Worker, Project: r.Project, Status: status, Error: errText, Capabilities: r.normalizedCapabilities()}
 	resp, err := r.do(ctx, http.MethodPost, "/api/workers/heartbeat", payload)
 	if err != nil {
 		return err
@@ -176,6 +184,25 @@ func (r Remote) Heartbeat(ctx context.Context, status string) error {
 	resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("queue: heartbeat: %s", resp.Status)
+	}
+	return nil
+}
+
+// Progress reports a structured phase change for a claimed run. It is
+// best-effort: it carries its own 5-second timeout independent of the
+// client's, and every caller ignores the returned error — a Cloud outage or
+// a slow progress route must never abort or delay a run.
+func (r Remote) Progress(ctx context.Context, item Item, e Progress) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	resp, err := r.do(ctx, http.MethodPost, "/api/runs/"+item.ID+"/progress", e)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("queue: progress: %s: %s", resp.Status, bytes.TrimSpace(b))
 	}
 	return nil
 }

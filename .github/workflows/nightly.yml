@@ -1,0 +1,32 @@
+name: nightly
+# Continuous testing (docs/testing.md): every night the whole suite runs three
+# times, shuffled, with the race detector, so a flaky test shows up here
+# before it shows up in someone's pull request. A failure is visible in
+# Actions and in GitHub's failed-workflow e-mail.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  flaky:
+    runs-on: ubuntu-latest
+    env:
+      TRILHA_REQUIRE_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25"
+      - run: make flaky
+      - name: Test report
+        if: always()
+        run: |
+          set +e
+          make -s report > report.md
+          status=$?
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          exit $status

@@ -20,6 +20,7 @@ func (l *attemptLoop) verify(attemptNumber int, attemptStart time.Time, output d
 	} else {
 		l.runner.logf("nothing to commit")
 	}
+	l.runner.progress(Event{Phase: "running_checks", Attempt: attemptNumber, MaxAttempts: l.maxAttempts})
 	if err := taskcompat.Move(l.runner.Store, l.item, task.Verify); err != nil {
 		return false, "", err
 	}

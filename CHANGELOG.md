@@ -2,6 +2,64 @@
 
 This project follows semantic versioning.
 
+## Unreleased
+
+### Fixed
+
+- A run that could not start because the project is not a git repository, or because the
+  agent manifest names an unknown driver, returned an error and left the task `ready` with no
+  evidence — against principle III and what the README promised. The task now goes
+  `ready → running → failed` with a `run` record of stage `worktree` or `driver`, like a
+  missing `exec` command already did. A task that is not `ready` or is blocked by a dependency
+  is still left untouched. The note no longer repeats the stage (`worktree: worktree: …`), and
+  `run`/`next` print no empty `branch` line when no worktree was created.
+- A worker with `--push` could publish a branch only once. Its checkout is a single-branch
+  clone, so a push left no remote-tracking ref, and the next `--force-with-lease` on the same
+  branch expected it not to exist and was refused as stale: the second task of a round failed
+  to publish the spec branch, and a rerun failed to publish its task branch. The checkout now
+  tracks `refs/heads/trilha/*`, so each push records what the runner published and the next
+  one is refused only when someone else moved the branch. A checkout cloned by an earlier
+  version adopts the branches already on the remote the first time it is reused.
+
+### Added
+
+- IBM's seven end-to-end testing practices, applied (`docs/testing.md`): every case in the
+  journey catalog states resources, preconditions, data, steps and expected; `internal/catalog`
+  fails the suite when a case is incomplete, cites a missing test, a test belongs to no case,
+  the locales differ, or a fixture holds a real-looking e-mail, token or host. `make report`
+  (`internal/testreport`) summarizes passed/failed/skipped, skip reasons, the slowest tests
+  and coverage per package, and fails below `testdata/coverage-floor.txt`; CI shows it in the
+  job summary. CI requires Docker on GitHub-hosted runners (`TRILHA_REQUIRE_DOCKER`), runs the
+  binary and git packages on macOS (`make host`), and `nightly.yml` runs `make flaky` every
+  night. A pull request template asks for journey, cases, tests per level, numbers, what was
+  not tested and the acceptance in business words.
+- Tests for the gaps the journey catalog listed: the Cloud client for bundles, progress and
+  deployments; the worker's cross-project dependency check; the bundle checkout, divergent
+  files and branch publishing; loading delivery profiles (including the shipped example); and
+  the attempt loop retrying a transient provider failure through `Runner.Run`.
+- A testing standard (constitution principle VII, `docs/testing.md`) and a catalog of user
+  journeys with their test cases (`docs/journeys.md`); `make ci`, `make flaky`, `make e2e` and
+  `make cover`. Tests for `worktree`, `internal/taskcompat`, cross-repository dependency rules,
+  the retry policy and a failing agent through the CLI binary.
+
+## 0.4.0 — 2026-09-19
+
+### Added
+
+- `runner.Runner` gained a `Progress func(Event)` hook, emitted alongside (never parsed from)
+  the existing `Log` lines at the points a run changes phase: worktree creation, each attempt
+  starting, verification, a retrying attempt and entering review. `queue.Remote.Progress`
+  posts this best-effort to `POST /api/runs/{id}/progress` on trilha-cloud with its own 5-second
+  timeout; the worker ignores its error so a Cloud outage never slows or aborts a run. Wired
+  into `executeWorkerItem` for both the local and the Cloud-managed bundle path.
+- `cmdWorker` now builds `queue.Remote` before `newRunner`, so a startup failure — most often
+  a missing `.trilha/` — has somewhere to report itself: `_ = q.Heartbeat(ctx, "failed", err)`
+  before returning the error. `queue.Remote.Heartbeat` takes an optional error string
+  (`Heartbeat(ctx, status, errorText ...string)`) carried as `"error"` in the JSON body.
+  `runRemoteWorker` also sends a best-effort `stopping` heartbeat (3-second timeout) when its
+  context is cancelled, so a systemd `SIGTERM` shows up in the fleet panel instead of just
+  going quiet.
+
 ## 0.3.2 — 2026-09-19
 
 ### Fixed
