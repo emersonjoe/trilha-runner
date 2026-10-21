@@ -29,6 +29,11 @@
       "status": "passed",
       "model": "gpt-5",
       "total_tokens": 3000,
+      "provider": "openai",
+      "tokens_in": 2400,
+      "tokens_out": 600,
+      "cost": 0.0421,
+      "currency": "USD",
       "started": "2026-09-14T12:00:04Z",
       "finished": "2026-09-14T12:00:09Z"
     }

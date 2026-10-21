@@ -202,7 +202,9 @@ que o cloud não lê.
 - Dados: uma reivindicação, um resultado, um heartbeat; a fixture `execution-v1`.
 - Passos: reivindicar, reportar, heartbeat.
 - Esperado: `Authorization: Bearer`; 204 é fila vazia; o resultado bate com a fixture
-  `execution-v1` do `trilha-spec`.
+  `execution-v1` do `trilha-spec` (copiada byte a byte, `make conformance`, também um job de CI),
+  volta campo a campo depois de uma ida e volta, e uma tentativa mantém seu custo sob os nomes do
+  protocolo: `provider`, `tokens_in`, `tokens_out`, `cost`, `currency`.
 
 **J5.2 Capacidade** — I `TestWorkerCapacityClaimsThirdOnlyAfterOneFinishes`
 - Recursos: httptest.

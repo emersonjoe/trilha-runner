@@ -198,7 +198,9 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
 - Data: a claim, a result, a heartbeat; the `execution-v1` fixture.
 - Steps: claim, report, heartbeat.
 - Expected: `Authorization: Bearer`; 204 is an empty queue; the result matches the
-  `execution-v1` fixture of `trilha-spec`.
+  `execution-v1` fixture of `trilha-spec` (copied byte for byte, `make conformance`, also a CI
+  job), reads back field for field after a round trip, and an attempt keeps its cost under the
+  protocol's names: `provider`, `tokens_in`, `tokens_out`, `cost`, `currency`.
 
 **J5.2 Capacity** — I `TestWorkerCapacityClaimsThirdOnlyAfterOneFinishes`
 - Resources: httptest.

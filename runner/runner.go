@@ -69,15 +69,23 @@ type Event struct {
 
 // Attempt is one provider or corrective execution inside a logical run.
 type Attempt struct {
-	Number        int       `json:"number"`
-	Status        string    `json:"status"`
-	FailureClass  string    `json:"failure_class,omitempty"`
-	RepairReason  string    `json:"repair_reason,omitempty"`
-	Model         string    `json:"model,omitempty"`
-	TotalTokens   int       `json:"total_tokens,omitempty"`
-	EstimatedCost float64   `json:"estimated_cost,omitempty"`
-	Started       time.Time `json:"started"`
-	Finished      time.Time `json:"finished"`
+	Number        int     `json:"number"`
+	Status        string  `json:"status"`
+	FailureClass  string  `json:"failure_class,omitempty"`
+	ErrorCode     string  `json:"error_code,omitempty"`
+	RepairReason  string  `json:"repair_reason,omitempty"`
+	Model         string  `json:"model,omitempty"`
+	TotalTokens   int     `json:"total_tokens,omitempty"`
+	EstimatedCost float64 `json:"estimated_cost,omitempty"`
+	// The cost of the attempt under the names a `run` evidence record uses
+	// (protocol §5 and §10).
+	Provider  string    `json:"provider,omitempty"`
+	TokensIn  int       `json:"tokens_in,omitempty"`
+	TokensOut int       `json:"tokens_out,omitempty"`
+	Cost      float64   `json:"cost,omitempty"`
+	Currency  string    `json:"currency,omitempty"`
+	Started   time.Time `json:"started"`
+	Finished  time.Time `json:"finished"`
 }
 
 // Result is what a run leaves behind.
@@ -101,9 +109,12 @@ type Result struct {
 	TotalTokens     int             `json:"total_tokens,omitempty"`
 	EstimatedCost   float64         `json:"estimated_cost,omitempty"`
 	FailureClass    string          `json:"failure_class,omitempty"`
-	FilesChanged    []string        `json:"files_changed,omitempty"`
-	DiffSummary     string          `json:"diff_summary,omitempty"`
-	AgentReport     string          `json:"agent_report,omitempty"`
+	// ErrorCode is the machine-readable detail next to FailureClass, for
+	// example environment_missing_tool.
+	ErrorCode    string   `json:"error_code,omitempty"`
+	FilesChanged []string `json:"files_changed,omitempty"`
+	DiffSummary  string   `json:"diff_summary,omitempty"`
+	AgentReport  string   `json:"agent_report,omitempty"`
 }
 
 // New opens the layout above dir.

@@ -293,9 +293,9 @@ func resultReport(result *runner.Result, runErr error) queue.Result {
 	if result != nil {
 		attempts := make([]queue.Attempt, 0, len(result.Attempts))
 		for _, attempt := range result.Attempts {
-			attempts = append(attempts, queue.Attempt{Number: attempt.Number, Status: attempt.Status, FailureClass: attempt.FailureClass, RepairReason: attempt.RepairReason, Model: attempt.Model, TotalTokens: attempt.TotalTokens, EstimatedCost: attempt.EstimatedCost, Started: attempt.Started, Finished: attempt.Finished})
+			attempts = append(attempts, queue.Attempt{Number: attempt.Number, Status: attempt.Status, FailureClass: attempt.FailureClass, ErrorCode: attempt.ErrorCode, RepairReason: attempt.RepairReason, Model: attempt.Model, TotalTokens: attempt.TotalTokens, EstimatedCost: attempt.EstimatedCost, Provider: attempt.Provider, TokensIn: attempt.TokensIn, TokensOut: attempt.TokensOut, Cost: attempt.Cost, Currency: attempt.Currency, Started: attempt.Started, Finished: attempt.Finished})
 		}
-		report = queue.Result{ProtocolVersion: result.ProtocolVersion, Passed: result.Passed, Status: string(result.Status), Branch: result.Branch, Commit: result.Commit, Evidence: result.Evidence, Log: result.Output, Attempt: result.Attempt, FailureClass: result.FailureClass, Model: result.Model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens, EstimatedCost: result.EstimatedCost, DurationMS: result.Elapsed.Milliseconds(), FilesChanged: result.FilesChanged, DiffSummary: result.DiffSummary, AgentReport: result.AgentReport, Attempts: attempts}
+		report = queue.Result{ProtocolVersion: result.ProtocolVersion, Passed: result.Passed, Status: string(result.Status), Branch: result.Branch, Commit: result.Commit, Evidence: result.Evidence, Log: result.Output, Attempt: result.Attempt, FailureClass: result.FailureClass, ErrorCode: result.ErrorCode, Model: result.Model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens, EstimatedCost: result.EstimatedCost, DurationMS: result.Elapsed.Milliseconds(), FilesChanged: result.FilesChanged, DiffSummary: result.DiffSummary, AgentReport: result.AgentReport, Attempts: attempts}
 	}
 	if runErr != nil {
 		report.Error = runErr.Error()

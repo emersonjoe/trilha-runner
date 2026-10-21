@@ -175,17 +175,24 @@ type Progress struct {
 }
 
 type Attempt struct {
-	Number        int       `json:"number"`
-	Status        string    `json:"status"`
-	FailureClass  string    `json:"failure_class,omitempty"`
-	ErrorCode     string    `json:"error_code,omitempty"`
-	Message       string    `json:"message,omitempty"`
-	RepairReason  string    `json:"repair_reason,omitempty"`
-	Model         string    `json:"model,omitempty"`
-	TotalTokens   int       `json:"total_tokens,omitempty"`
-	EstimatedCost float64   `json:"estimated_cost,omitempty"`
-	Started       time.Time `json:"started"`
-	Finished      time.Time `json:"finished,omitempty"`
+	Number        int     `json:"number"`
+	Status        string  `json:"status"`
+	FailureClass  string  `json:"failure_class,omitempty"`
+	ErrorCode     string  `json:"error_code,omitempty"`
+	Message       string  `json:"message,omitempty"`
+	RepairReason  string  `json:"repair_reason,omitempty"`
+	Model         string  `json:"model,omitempty"`
+	TotalTokens   int     `json:"total_tokens,omitempty"`
+	EstimatedCost float64 `json:"estimated_cost,omitempty"`
+	// The cost of the attempt under the names a `run` evidence record uses
+	// (protocol §5 and §10): provider, tokens in and out, cost and currency.
+	Provider  string    `json:"provider,omitempty"`
+	TokensIn  int       `json:"tokens_in,omitempty"`
+	TokensOut int       `json:"tokens_out,omitempty"`
+	Cost      float64   `json:"cost,omitempty"`
+	Currency  string    `json:"currency,omitempty"`
+	Started   time.Time `json:"started"`
+	Finished  time.Time `json:"finished,omitempty"`
 }
 
 // DeploymentWork is a claimed operation. Secrets are disclosed only on the

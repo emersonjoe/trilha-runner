@@ -30,6 +30,14 @@ This project follows semantic versioning.
 
 ### Added
 
+- The execution contract is conformant again: `testdata/contracts/execution-v1.json` and
+  `execution-v1.schema.json` are byte for byte trilha-spec's canonical fixture and schema, and
+  `queue.Attempt` / `runner.Attempt` carry an attempt's cost under the protocol's names
+  (`provider`, `tokens_in`, `tokens_out`, `cost`, `currency`), filled from what the driver
+  reports and proven by the contract test to survive a round trip. `error_code` now travels
+  on the result and on each attempt. A `conformance` CI job checks out `emersonjoe/trilha-spec`
+  (`main`) as a sibling and runs `make conformance`, so the fixtures cannot drift silently
+  (roadmap RM-003).
 - `.github/workflows/release.yml`: a tag `vX.Y.Z` builds static binaries for linux/amd64,
   linux/arm64, darwin/amd64 and darwin/arm64 with `-trimpath -ldflags "-s -w -X main.version=X.Y.Z"`,
   publishes them with `sha256sums.txt` and the CHANGELOG section of that version as the release
