@@ -44,6 +44,10 @@ This project follows semantic versioning.
 
 ### Added
 
+- `.trilha/` tells the truth about what shipped: spec 002 (Cloud bundles in real repositories,
+  0.2.0) is `done`; TASK-007 "Container sandbox" (0.3.0) is `done` with an evidence note pointing at
+  the 0.3.0 changelog; TASK-006 (open a PR after review) stays an idea and names roadmap RM-030
+  (roadmap RM-004).
 - The execution contract is conformant again: `testdata/contracts/execution-v1.json` and
   `execution-v1.schema.json` are byte for byte trilha-spec's canonical fixture and schema, and
   `queue.Attempt` / `runner.Attempt` carry an attempt's cost under the protocol's names
