@@ -30,7 +30,7 @@ Sem Go, toda release traz um binário estático por plataforma (`linux`/`darwin`
 `amd64`/`arm64`) e um `sha256sums.txt`:
 
 ```bash
-v=0.4.0; os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
+v=0.5.0; os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
 curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/trilha-runner_${v}_${os}_${arch}"
 curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/sha256sums.txt"
 sha256sum --check --ignore-missing sha256sums.txt      # shasum -a 256 --check no macOS
