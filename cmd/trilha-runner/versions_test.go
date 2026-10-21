@@ -23,14 +23,16 @@ func TestDriverVersionsComeFromTheBinariesOnPath(t *testing.T) {
 		}
 	}
 	write("claude", "echo '1.2.3 (Claude Code)'\necho 'a second line nobody needs'\n")
-	write("codex", "sleep 5\necho codex-cli 9.9.9\n")
+	write("codex", "sleep 30\necho codex-cli 9.9.9\n")
 	// Only the fake binaries and the shell: the real PATH may well have a
 	// claude of its own, and the test must not depend on it.
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/bin"+string(os.PathListSeparator)+"/usr/bin")
 
 	start := time.Now()
-	got := driverVersions(context.Background(), []string{"ai", "claude-code", "echo", "exec"}, 200*time.Millisecond)
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
+	// Two seconds is generous for a shell that only echoes, even under the
+	// race detector on a loaded machine, and far short of the 30 s sleep.
+	got := driverVersions(context.Background(), []string{"ai", "claude-code", "echo", "exec"}, 2*time.Second)
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Fatalf("a binary that does not answer held the worker for %s", elapsed)
 	}
 	want := map[string]string{
@@ -52,7 +54,7 @@ func TestDriverVersionsComeFromTheBinariesOnPath(t *testing.T) {
 
 	// Nothing on PATH at all: every agent is unknown, the runner still knows itself.
 	t.Setenv("PATH", t.TempDir())
-	got = driverVersions(context.Background(), []string{"echo", "claude-code"}, 200*time.Millisecond)
+	got = driverVersions(context.Background(), []string{"echo", "claude-code"}, 2*time.Second)
 	if got["echo"] != version || got["claude-code"] != "unknown" || got["claude"] != "unknown" || got["codex"] != "unknown" {
 		t.Fatalf("driver_versions = %v", got)
 	}

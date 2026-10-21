@@ -282,7 +282,7 @@ que o cloud não lê.
 - Recursos: sh; binários falsos num PATH privado.
 - Pré-condições: um script `claude` que imprime `1.2.3 (Claude Code)`; um script `codex` que dorme
   além do timeout; depois um PATH vazio.
-- Dados: os nomes dos drivers; timeout de 200 ms.
+- Dados: os nomes dos drivers; timeout de 2 s contra um sleep de 30 s.
 - Passos: resolver `driver_versions` como o `cmdWorker` faz na subida.
 - Esperado: `claude-code` e `claude` são `1.2.3 (Claude Code)` (só a primeira linha); `codex` é
   `unknown` e a busca volta bem antes de 3 s; `echo`, `ai` e `exec` levam a versão do próprio

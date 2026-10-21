@@ -279,7 +279,7 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
 - Resources: sh; fake binaries on a private PATH.
 - Preconditions: a `claude` script that prints `1.2.3 (Claude Code)`; a `codex` script that sleeps
   past the timeout; then an empty PATH.
-- Data: the driver names; a 200 ms timeout.
+- Data: the driver names; a 2 s timeout against a 30 s sleep.
 - Steps: resolve `driver_versions` the way `cmdWorker` does at startup.
 - Expected: `claude-code` and `claude` are `1.2.3 (Claude Code)` (first line only); `codex` is
   `unknown` and the lookup returns well before 3 s; `echo`, `ai` and `exec` carry the runner's
