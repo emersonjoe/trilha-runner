@@ -232,10 +232,7 @@ func cmdWorker(ctx context.Context, args []string, out io.Writer) error {
 	if *capacity < 1 {
 		return errors.New("worker capacity must be at least 1")
 	}
-	versions := map[string]string{}
-	for _, name := range driver.Names() {
-		versions[name] = version
-	}
+	versions := driverVersions(ctx, driver.Names(), versionTimeout)
 	// q is built before newRunner so a startup failure — missing .trilha/,
 	// a bad delivery config — has somewhere to report itself: the fleet
 	// panel otherwise just sees the last good heartbeat and calls it fine.

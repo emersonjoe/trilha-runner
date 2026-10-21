@@ -275,6 +275,16 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
   project, or without id or profile, is refused; the report always carries this worker and
   project (a value set by the caller is overwritten) and never the claim's secrets.
 
+**J5.9 The heartbeat says which agents the worker has** — U `TestDriverVersionsComeFromTheBinariesOnPath`
+- Resources: sh; fake binaries on a private PATH.
+- Preconditions: a `claude` script that prints `1.2.3 (Claude Code)`; a `codex` script that sleeps
+  past the timeout; then an empty PATH.
+- Data: the driver names; a 200 ms timeout.
+- Steps: resolve `driver_versions` the way `cmdWorker` does at startup.
+- Expected: `claude-code` and `claude` are `1.2.3 (Claude Code)` (first line only); `codex` is
+  `unknown` and the lookup returns well before 3 s; `echo`, `ai` and `exec` carry the runner's
+  own version; with nothing on PATH every agent is `unknown` and the runner still knows itself.
+
 ## J6 — Work created in the UI (bundles) · high
 
 *The worker downloads a bundle, writes its spec and tasks under `.trilha/` and publishes the branch.*

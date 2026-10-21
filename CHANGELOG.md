@@ -6,6 +6,11 @@ This project follows semantic versioning.
 
 ### Fixed
 
+- `driver_versions` on the claim and the heartbeat repeated the runner's own version for every
+  driver, so the fleet panel could not tell which `claude` or `codex` a worker had. The worker
+  now runs `claude --version` and `codex --version` once at startup, with a 3-second timeout,
+  and reports their first line (`unknown` when the binary is absent or silent); `echo` and `ai`
+  keep the runner's version (roadmap RM-008).
 - A tool the checks need but the worker does not have burned every attempt of the model
   (acervo `run-000007` spent three because `python` was missing; issues #13, #14). Before the
   first attempt the runner now resolves the program of every check — `exec.LookPath` on the

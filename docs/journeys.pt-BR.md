@@ -278,6 +278,16 @@ que o cloud não lê.
   projeto, ou sem id ou perfil, é recusado; o relatório sempre leva este worker e projeto
   (valor posto por quem chama é sobrescrito) e nunca os segredos da reivindicação.
 
+**J5.9 O heartbeat diz quais agentes o worker tem** — U `TestDriverVersionsComeFromTheBinariesOnPath`
+- Recursos: sh; binários falsos num PATH privado.
+- Pré-condições: um script `claude` que imprime `1.2.3 (Claude Code)`; um script `codex` que dorme
+  além do timeout; depois um PATH vazio.
+- Dados: os nomes dos drivers; timeout de 200 ms.
+- Passos: resolver `driver_versions` como o `cmdWorker` faz na subida.
+- Esperado: `claude-code` e `claude` são `1.2.3 (Claude Code)` (só a primeira linha); `codex` é
+  `unknown` e a busca volta bem antes de 3 s; `echo`, `ai` e `exec` levam a versão do próprio
+  runner; sem nada no PATH todo agente é `unknown` e o runner ainda sabe quem é.
+
 ## J6 — Trabalho criado na UI (bundles) · alta
 
 *O worker baixa um bundle, escreve spec e tasks em `.trilha/` e publica o branch.*

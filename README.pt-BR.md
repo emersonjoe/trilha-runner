@@ -102,8 +102,10 @@ Um worker é um processo num checkout. Pede ao control plane a próxima execuç�
 (`POST /api/runs/next`), executa localmente exatamente como acima e reporta resultado e
 evidência (`POST /api/runs/{id}/result`). O código não sai da máquina; o cloud vê status,
 branch, commit e evidência. `queue.Remote` é o contrato inteiro, então outro control plane
-pode implementá-lo. Heartbeat e claim carregam labels, capacidade, runs ativas e versões do
-runner e dos drivers. Cada run pode carregar um objeto `ai` transitório com provedor, URL base,
+pode implementá-lo. Heartbeat e claim carregam labels, capacidade, runs ativas, a versão do
+runner e `driver_versions`: o que `claude --version` e `codex --version` respondem neste worker,
+resolvido uma vez na subida com timeout de 3 s (`unknown` quando o binário falta ou não
+responde; `echo` e `ai` são o próprio runner). Cada run pode carregar um objeto `ai` transitório com provedor, URL base,
 modelo, credencial e hosts permitidos; a credencial nunca é persistida.
 
 Dependências entre repositórios usam `depends_on: alias:TASK-NNN`. A execução local resolve os

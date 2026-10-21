@@ -102,7 +102,9 @@ A worker is one process on one checkout. It asks the control plane for the next 
 evidence (`POST /api/runs/{id}/result`). The code never leaves the machine; the cloud sees
 status, branch, commit and evidence. `queue.Remote` is the whole contract, so another control
 plane can implement it. Heartbeat and claim requests carry labels, capacity, active-run count,
-runner version and driver versions. Each claimed run may carry a transient `ai` object with
+the runner version and `driver_versions`: what `claude --version` and `codex --version` answer on
+this worker, resolved once at startup with a 3-second timeout (`unknown` when the binary is
+absent or silent; `echo` and `ai` are the runner itself). Each claimed run may carry a transient `ai` object with
 provider, base URL, model, credential and allowed hosts; the credential is never persisted.
 
 Cross-repository dependencies use `depends_on: alias:TASK-NNN`. Local execution resolves aliases
