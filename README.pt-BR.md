@@ -20,9 +20,27 @@ nunca é tocada.
 
 ## Instalar e rodar
 
+Com Go:
+
 ```bash
 go install github.com/emersonjoe/trilha-runner/cmd/trilha-runner@latest
+```
 
+Sem Go, toda release traz um binário estático por plataforma (`linux`/`darwin` ×
+`amd64`/`arm64`) e um `sha256sums.txt`:
+
+```bash
+v=0.4.0; os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
+curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/trilha-runner_${v}_${os}_${arch}"
+curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/sha256sums.txt"
+sha256sum --check --ignore-missing sha256sums.txt      # shasum -a 256 --check no macOS
+install -m 0755 "trilha-runner_${v}_${os}_${arch}" /usr/local/bin/trilha-runner
+trilha-runner version
+```
+
+Depois, num projeto:
+
+```bash
 # Num repositório git com .trilha/ (trilha-spec init):
 trilha-runner next                          # primeira task executável, agente do manifesto
 trilha-runner run TASK-003 --driver exec --cmd "claude -p -"

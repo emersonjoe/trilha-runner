@@ -23,9 +23,12 @@ import (
 	"github.com/emersonjoe/trilha-runner/worktree"
 )
 
-const version = "0.4.0"
+// version is the release this binary is. It is a var so a release build can
+// set it at link time (`-ldflags "-X main.version=0.4.0"`); the source value
+// is what `go install` reports and what the changelog test pins.
+var version = "0.4.0"
 
-const usage = `trilha-runner ` + version + ` — executes tasks of the Trilha protocol
+var usage = `trilha-runner ` + version + ` — executes tasks of the Trilha protocol
 
 usage: trilha-runner <command> [flags]
 

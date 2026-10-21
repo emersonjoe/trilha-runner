@@ -30,6 +30,13 @@ This project follows semantic versioning.
 
 ### Added
 
+- `.github/workflows/release.yml`: a tag `vX.Y.Z` builds static binaries for linux/amd64,
+  linux/arm64, darwin/amd64 and darwin/arm64 with `-trimpath -ldflags "-s -w -X main.version=X.Y.Z"`,
+  publishes them with `sha256sums.txt` and the CHANGELOG section of that version as the release
+  notes. Nothing is built before `TestVersionMatchesTag` proves the tag is the version in
+  `cmd/trilha-runner/main.go` (`version` is now a `var`, overridable at link time) and `make test`
+  is green; actions are pinned by SHA like `ci.yml`. The README shows the install path without Go
+  (roadmap RM-002).
 - IBM's seven end-to-end testing practices, applied (`docs/testing.md`): every case in the
   journey catalog states resources, preconditions, data, steps and expected; `internal/catalog`
   fails the suite when a case is incomplete, cites a missing test, a test belongs to no case,

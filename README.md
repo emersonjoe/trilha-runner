@@ -20,9 +20,27 @@ Your working copy is never touched.
 
 ## Install and run
 
+With Go:
+
 ```bash
 go install github.com/emersonjoe/trilha-runner/cmd/trilha-runner@latest
+```
 
+Without Go, every release carries one static binary per platform (`linux`/`darwin` ×
+`amd64`/`arm64`) and a `sha256sums.txt`:
+
+```bash
+v=0.4.0; os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
+curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/trilha-runner_${v}_${os}_${arch}"
+curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/sha256sums.txt"
+sha256sum --check --ignore-missing sha256sums.txt      # shasum -a 256 --check on macOS
+install -m 0755 "trilha-runner_${v}_${os}_${arch}" /usr/local/bin/trilha-runner
+trilha-runner version
+```
+
+Then, in a project:
+
+```bash
 # In a git repository with .trilha/ (trilha-spec init):
 trilha-runner next                          # first executable task, agent from its manifest
 trilha-runner run TASK-003 --driver exec --cmd "claude -p -"

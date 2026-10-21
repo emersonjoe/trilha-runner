@@ -451,6 +451,17 @@ Worst impact: an agent that writes or runs outside its worktree.
 - Steps: compare them.
 - Expected: equal; an `Unreleased` section does not count.
 
+**J11.2 A tag only releases the version it names** — U `TestVersionMatchesTag`
+- Resources: none (`release.yml` runs it before building anything).
+- Preconditions: `release.yml` triggered by a tag `vX.Y.Z`; `RELEASE_TAG` set to that tag.
+- Data: `RELEASE_TAG=v9.9.9` against `version` `0.4.0`; `RELEASE_TAG=v0.4.0`; no `RELEASE_TAG`.
+- Steps: run the test with each value.
+- Expected: a mismatched tag fails naming both values, so no binary is built or published; the
+  matching tag passes; without the variable the test only requires `version` to be
+  `MAJOR.MINOR.PATCH`. The release then carries four static binaries (`linux`/`darwin` ×
+  `amd64`/`arm64`, built with `-trimpath -ldflags "-s -w -X main.version=X.Y.Z"`),
+  `sha256sums.txt` and the CHANGELOG section of that version as the notes.
+
 ## J12 — The suite keeps itself honest · medium
 
 *Whoever changes the runner trusts that the catalog, the fixtures and the numbers are true.*

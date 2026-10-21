@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -30,5 +31,29 @@ func TestVersionMatchesTheNewestChangelogEntry(t *testing.T) {
 	}
 	if got := string(newest[1]); got != version {
 		t.Fatalf("const version is %q but the newest CHANGELOG entry is %q: bump one of them", version, got)
+	}
+}
+
+// reSemver is the shape of a released version: `0.4.0`, never `v0.4.0`.
+var reSemver = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
+// TestVersionMatchesTag is the release gate. release.yml runs it with
+// RELEASE_TAG set to the tag that triggered it, before building anything: a
+// tag `v0.5.0` on a tree whose binary says `0.4.0` would publish four
+// binaries that misreport themselves to every fleet they join, so the
+// workflow stops here instead. Without RELEASE_TAG — every ordinary run — the
+// test only checks the version has the shape a tag can carry, so the suite
+// never depends on how it was invoked.
+func TestVersionMatchesTag(t *testing.T) {
+	if !reSemver.MatchString(version) {
+		t.Fatalf("version %q is not MAJOR.MINOR.PATCH", version)
+	}
+	tag := os.Getenv("RELEASE_TAG")
+	if tag == "" {
+		return
+	}
+	want, ok := strings.CutPrefix(tag, "v")
+	if !ok || want != version {
+		t.Fatalf("RELEASE_TAG is %q but the binary says %q: tag v%s, or bump version in cmd/trilha-runner/main.go", tag, version, version)
 	}
 }

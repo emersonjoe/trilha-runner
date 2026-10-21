@@ -457,6 +457,17 @@ Pior impacto: um agente que escreve ou executa fora do seu worktree.
 - Passos: comparar as duas.
 - Esperado: iguais; uma seção `Unreleased` não conta.
 
+**J11.2 Uma tag só publica a versão que nomeia** — U `TestVersionMatchesTag`
+- Recursos: nenhum (o `release.yml` roda o teste antes de compilar qualquer coisa).
+- Pré-condições: `release.yml` disparado por uma tag `vX.Y.Z`; `RELEASE_TAG` com essa tag.
+- Dados: `RELEASE_TAG=v9.9.9` contra `version` `0.4.0`; `RELEASE_TAG=v0.4.0`; sem `RELEASE_TAG`.
+- Passos: rodar o teste com cada valor.
+- Esperado: tag diferente falha citando os dois valores, então nenhum binário é compilado nem
+  publicado; tag igual passa; sem a variável o teste só exige que `version` seja
+  `MAJOR.MINOR.PATCH`. A release então leva quatro binários estáticos (`linux`/`darwin` ×
+  `amd64`/`arm64`, compilados com `-trimpath -ldflags "-s -w -X main.version=X.Y.Z"`),
+  `sha256sums.txt` e a seção do CHANGELOG daquela versão como notas.
+
 ## J12 — A suíte se mantém honesta · média
 
 *Quem muda o runner confia que o catálogo, as fixtures e os números são verdadeiros.*
