@@ -6,6 +6,15 @@ This project follows semantic versioning.
 
 ### Fixed
 
+- A tool the checks need but the worker does not have burned every attempt of the model
+  (acervo `run-000007` spent three because `python` was missing; issues #13, #14). Before the
+  first attempt the runner now resolves the program of every check — `exec.LookPath` on the
+  host, `command -v` through the sandbox prefix when there is one — and a missing one ends the
+  run at once: one attempt, no driver call, `failure_class: environment`,
+  `error_code: environment_missing_tool`, a `run` record naming the tool and the check. Exit
+  status 127, "command not found" and "executable file not found" during execution or
+  verification get the same class, and the retry policy never retries an `environment` failure
+  (roadmap RM-014).
 - The Docker sandbox case `TestDockerPostgresAndTeardown` failed on `main` (2026-10-15) with
   `db:5432 - no response` after readiness had passed: `pg_isready -U postgres` inside the service
   container answers on the Unix socket while the postgres image still runs `initdb`'s temporary

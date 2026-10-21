@@ -27,18 +27,28 @@ func (l *attemptLoop) captureOutput(logPath string, output driver.Output) error 
 	return os.WriteFile(logPath, []byte(output.Text), 0o644)
 }
 
-func (l *attemptLoop) recordExecutionFailure(attemptNumber int, stage string, executionErr error, failureClass string) error {
+// recordExecutionFailure leaves the run record of an attempt that did not
+// get to verification: the stage, the class and, when there is one, the
+// error_code and any extra detail (the missing tool, the check that needs it).
+func (l *attemptLoop) recordExecutionFailure(attemptNumber int, stage string, executionErr error, failureClass, errorCode string, extra map[string]string) error {
+	meta := map[string]string{
+		"driver":        l.driver.Name(),
+		"stage":         stage,
+		"attempt":       strconv.Itoa(attemptNumber),
+		"failure_class": failureClass,
+	}
+	if errorCode != "" {
+		meta["error_code"] = errorCode
+	}
+	for key, value := range extra {
+		meta[key] = value
+	}
 	evidence, _, err := task.Record(l.runner.Layout, task.Evidence{
 		Task: l.item.ID,
 		Kind: "run",
 		By:   l.runner.By,
 		Note: fmt.Sprintf("%s attempt %d: %v", stage, attemptNumber, executionErr),
-		Meta: map[string]string{
-			"driver":        l.driver.Name(),
-			"stage":         stage,
-			"attempt":       strconv.Itoa(attemptNumber),
-			"failure_class": failureClass,
-		},
+		Meta: meta,
 	})
 	if err != nil {
 		return err
@@ -57,6 +67,10 @@ func (l *attemptLoop) recordVerificationEvidence(attemptNumber int, output drive
 	}
 	for key, value := range output.Meta {
 		meta[key] = value
+	}
+	if check := missingTool(verification); check != "" {
+		meta["failure_class"], meta["error_code"] = failureEnvironment, errorMissingTool
+		meta["check"] = check
 	}
 	stat, _ := l.manager.DiffStat(l.ctx, l.tree)
 	if stat != "" {

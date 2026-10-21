@@ -127,6 +127,21 @@ U `TestAIRejectsForbiddenHostBeforeCallingProvider`
 - Passos: rodar `TASK-002`.
 - Esperado: erro citando a dependência; a task continua `ready`; nenhuma evidência.
 
+**J2.8 Ferramenta ausente é falha de ambiente, não três tentativas** — I `TestMissingCheckToolFailsBeforeTheDriverRuns`,
+`TestMissingCheckToolInsideTheSandboxFailsBeforeTheDriverRuns`, `TestCheckExitingWith127IsAnEnvironmentFailureWithoutRetry`
+- Recursos: git, sh; um prefixo de sandbox falso (um script no lugar do `docker exec`).
+- Pré-condições: uma task `ready` cujo check chama um programa que o worker não tem; ou um
+  sandbox cujo `command -v` responde 127; ou um check que sai com 127 em tempo de execução.
+- Dados: checks `trilha-no-such-tool-0a1b2c --version`, `python -c 'import app'` (sandbox),
+  `sh -c trilha-no-such-tool-0a1b2c`; um driver roteirizado que conta as chamadas.
+- Passos: rodar a task.
+- Esperado: `failed` depois de uma tentativa com `failure_class: environment` e
+  `error_code: environment_missing_tool` no resultado, na tentativa e no registro `run`, que cita
+  a ferramenta e o check; o driver nunca é chamado quando o preflight pega; no sandbox a busca é
+  `sh -c 'command -v "$1"' sh PROGRAMA` pelo prefixo e o host não é consultado; um 127 durante a
+  verificação recebe a mesma classe, o driver rodou uma vez e nenhuma tentativa corretiva segue
+  (issues #13, #14).
+
 ## J3 — Segredos nunca vazam · crítica
 
 *A credencial do projeto chega ao agente e a mais nenhum lugar.*
@@ -403,9 +418,11 @@ credencial.
 **J9.1 Classificação e backoff** — U `TestClassifyRetry`, `TestRetryDelay`, `TestWaitRetryStopsOnCancel`
 - Recursos: nenhum.
 - Pré-condições: nenhuma.
-- Dados: timeouts, resets, 429, 5xx, 401, 403, quota, permission; valores de `Retry-After`.
+- Dados: timeouts, resets, 429, 5xx, 401, 403, quota, permission; exit 127, "command not found",
+  "executable file not found"; valores de `Retry-After`.
 - Passos: classificar cada erro; calcular as esperas.
-- Esperado: timeout, reset, 429 e 5xx tentam de novo; 401/403/quota/permission não;
+- Esperado: timeout, reset, 429 e 5xx tentam de novo; 401/403/quota/permission não; programa
+  ausente é `environment` e nunca repete;
   `Retry-After` até 300 s é respeitado; o backoff dobra até 16× a base; uma espera cancelada
   para na hora.
 

@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -37,6 +38,12 @@ func (l *attemptLoop) run() (*Result, error) {
 	checkpoints := checkpointStore{path: filepath.Join(l.runner.Layout.Runs(), l.item.ID, "checkpoint.json")}
 	checkpoint := checkpoints.load()
 	logPath := filepath.Join(l.runner.Layout.Runs(), l.item.ID, "agent.log")
+	// Before the agent is asked anything: every program the checks call must
+	// exist where the checks will run. A missing one fails every attempt the
+	// same way, so the run ends here, with one attempt and no driver call.
+	if tool, check, lookErr := l.preflight(); tool != "" {
+		return l.failEnvironment(1, "preflight", fmt.Errorf("check %q cannot run: %w", check, lookErr), map[string]string{"tool": tool, "check": check})
+	}
 	for attemptNumber := 1; attemptNumber <= l.maxAttempts; attemptNumber++ {
 		attemptStart := time.Now()
 		l.result.Attempt = attemptNumber
@@ -56,10 +63,13 @@ func (l *attemptLoop) run() (*Result, error) {
 			if stage == "policy" {
 				failureClass, retryable = "policy", false
 			}
-			l.result.Attempts = append(l.result.Attempts, attemptFromOutput(attemptNumber, "failed", failureClass, attemptStart, output))
+			errorCode := errorCodeFor(failureClass)
+			attempt := attemptFromOutput(attemptNumber, "failed", failureClass, attemptStart, output)
+			attempt.ErrorCode = errorCode
+			l.result.Attempts = append(l.result.Attempts, attempt)
 			diff, _ := l.manager.DiffStat(l.ctx, l.tree)
 			checkpoint = checkpoints.save(attemptNumber, output, executionErr, nil, diff)
-			if err := l.recordExecutionFailure(attemptNumber, stage, executionErr, failureClass); err != nil {
+			if err := l.recordExecutionFailure(attemptNumber, stage, executionErr, failureClass, errorCode, nil); err != nil {
 				return l.fail("evidence", err)
 			}
 			if retryable && attemptNumber < l.maxAttempts {
@@ -72,7 +82,7 @@ func (l *attemptLoop) run() (*Result, error) {
 				}
 				continue
 			}
-			l.result.FailureClass = failureClass
+			l.result.FailureClass, l.result.ErrorCode = failureClass, errorCode
 			if moveErr := taskcompat.Move(l.runner.Store, l.item, task.Failed); moveErr == nil {
 				l.result.Status = task.Failed
 			}
@@ -98,6 +108,15 @@ func (l *attemptLoop) run() (*Result, error) {
 		}
 		if err := taskcompat.Move(l.runner.Store, l.item, task.Failed); err != nil {
 			return l.fail("status", err)
+		}
+		if last := l.result.Attempts[len(l.result.Attempts)-1]; last.FailureClass == failureEnvironment {
+			// The checks could not run for want of a tool. A corrective
+			// attempt would ask the agent to fix what only the worker can.
+			l.result.Status = task.Failed
+			l.result.FailureClass, l.result.ErrorCode = failureEnvironment, errorMissingTool
+			l.result.Elapsed = time.Since(l.started)
+			l.runner.logf("a check needs a program this worker does not have; no corrective attempt")
+			return l.result, errors.New("verification failed: a check needs a program that is not installed (exit 127)")
 		}
 		if attemptNumber == l.maxAttempts {
 			l.result.Status = task.Failed
@@ -147,4 +166,24 @@ func (l *attemptLoop) model() string {
 		return l.manifest.Model
 	}
 	return ""
+}
+
+// failEnvironment ends the run on the spot because the worker lacks a program
+// it needs: one failed attempt that called no driver, a run record naming the
+// stage and what is missing, the task failed. There is no retry — asking the
+// agent again installs nothing (#13, #14).
+func (l *attemptLoop) failEnvironment(attemptNumber int, stage string, cause error, extra map[string]string) (*Result, error) {
+	now := time.Now()
+	l.result.Attempt = attemptNumber
+	l.runner.logf("%s: %v", stage, cause)
+	l.result.Attempts = append(l.result.Attempts, Attempt{Number: attemptNumber, Status: "failed", FailureClass: failureEnvironment, ErrorCode: errorMissingTool, Started: now, Finished: now})
+	if err := l.recordExecutionFailure(attemptNumber, stage, cause, failureEnvironment, errorMissingTool, extra); err != nil {
+		return l.fail("evidence", err)
+	}
+	l.result.FailureClass, l.result.ErrorCode = failureEnvironment, errorMissingTool
+	if moveErr := taskcompat.Move(l.runner.Store, l.item, task.Failed); moveErr == nil {
+		l.result.Status = task.Failed
+	}
+	l.result.Elapsed = time.Since(l.started)
+	return l.result, cause
 }

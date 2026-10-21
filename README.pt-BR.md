@@ -82,6 +82,13 @@ Uma partida que falha (sem repositório git, driver desconhecido, sem comando, a
 erro) é um registro `run` com o estágio que falhou, e a task vai para `failed`. Uma task que não
 está `ready`, ou ainda espera uma dependência, não roda e fica como estava.
 
+Uma ferramenta que os checks precisam mas o worker não tem é falha de **ambiente**, não três
+tentativas de um modelo: antes da primeira tentativa o runner resolve o programa de cada check —
+`exec.LookPath` no host, `command -v` pelo sandbox quando há um — e um que falte encerra a execução
+na hora com `failure_class: environment`, `error_code: environment_missing_tool`, um registro `run`
+citando a ferramenta e o check, e nenhuma chamada ao driver. Um check que sai com 127 em tempo de
+execução, ou um comando de agente que não está instalado, recebe a mesma classe e nunca é repetido.
+
 ## Worker: a ponte para o trilha-cloud
 
 ```bash

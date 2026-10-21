@@ -2,6 +2,7 @@ package runner
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/emersonjoe/trilha-runner/driver"
@@ -33,6 +34,10 @@ func (l *attemptLoop) verify(attemptNumber int, attemptStart time.Time, output d
 	if !verification.Passed {
 		attempt.Status = "failed"
 		attempt.FailureClass = "checks_failed"
+		if check := missingTool(verification); check != "" {
+			attempt.FailureClass, attempt.ErrorCode = failureEnvironment, errorMissingTool
+			l.runner.logf("check %q exited 127: a program it calls is not installed", check)
+		}
 	}
 	l.result.Attempts = append(l.result.Attempts, attempt)
 	checkpoint, runEvidence, err := l.recordVerificationEvidence(attemptNumber, output, logPath, checkpoints, verification)
@@ -41,4 +46,20 @@ func (l *attemptLoop) verify(attemptNumber int, attemptStart time.Time, output d
 	}
 	l.result.Evidence = append(l.result.Evidence, runEvidence)
 	return verification.Passed, checkpoint, nil
+}
+
+// missingTool answers the first check that did not run because a program it
+// calls is not installed — exit status 127, or Go's own words when the
+// program itself could not be started — or "" when the checks failed on
+// their own merits.
+func missingTool(verification *task.Verification) string {
+	for _, evidence := range verification.Evidence {
+		if evidence.Kind != "check" || evidence.Passed {
+			continue
+		}
+		if evidence.ExitCode == 127 || isEnvironmentFailure(strings.ToLower(evidence.Note)) {
+			return evidence.Command
+		}
+	}
+	return ""
 }

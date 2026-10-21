@@ -24,6 +24,12 @@ func TestClassifyRetry(t *testing.T) {
 		{errors.New("insufficient quota"), "provider_permanent", false},
 		{errors.New("permission denied"), "provider_permanent", false},
 		{errors.New("exit status 9"), "execution", false},
+		// A program that is not installed: exit 127, or the shell's and Go's
+		// own words for it. Asking the agent again installs nothing (#13, #14).
+		{errors.New("exec: python exited 127"), "environment", false},
+		{errors.New("sh: 1: python: not found (exit status 127)"), "environment", false},
+		{errors.New("bash: python: command not found"), "environment", false},
+		{errors.New(`exec: exec: "claude": executable file not found in $PATH`), "environment", false},
 	}
 	for _, c := range cases {
 		class, retryable := classifyRetry(c.err)

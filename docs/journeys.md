@@ -124,6 +124,21 @@ U `TestAIRejectsForbiddenHostBeforeCallingProvider`
 - Steps: run `TASK-002`.
 - Expected: an error naming the dependency; the task stays `ready`; no evidence.
 
+**J2.8 A missing tool is an environment failure, not three attempts** — I `TestMissingCheckToolFailsBeforeTheDriverRuns`,
+`TestMissingCheckToolInsideTheSandboxFailsBeforeTheDriverRuns`, `TestCheckExitingWith127IsAnEnvironmentFailureWithoutRetry`
+- Resources: git, sh; a fake sandbox prefix (a script standing in for `docker exec`).
+- Preconditions: a `ready` task whose check calls a program the worker does not have; or a
+  sandbox whose `command -v` answers 127; or a check that exits 127 at run time.
+- Data: checks `trilha-no-such-tool-0a1b2c --version`, `python -c 'import app'` (sandbox),
+  `sh -c trilha-no-such-tool-0a1b2c`; a scripted driver that counts its calls.
+- Steps: run the task.
+- Expected: `failed` after one attempt with `failure_class: environment` and
+  `error_code: environment_missing_tool` on the result, on the attempt and in the `run` record,
+  which names the tool and the check; the driver is never called when preflight catches it; in
+  the sandbox the lookup is `sh -c 'command -v "$1"' sh PROGRAM` through the prefix and the host is
+  not consulted; an exit 127 during verification gets the same class, the driver ran once and
+  no corrective attempt follows (issues #13, #14).
+
 ## J3 — Secrets never leak · critical
 
 *A project credential reaches the agent and nowhere else.*
@@ -397,9 +412,11 @@ Worst impact: a run abandoned for a hiccup, or hammering a provider that refused
 **J9.1 Classification and backoff** — U `TestClassifyRetry`, `TestRetryDelay`, `TestWaitRetryStopsOnCancel`
 - Resources: none.
 - Preconditions: none.
-- Data: timeouts, resets, 429, 5xx, 401, 403, quota, permission; `Retry-After` values.
+- Data: timeouts, resets, 429, 5xx, 401, 403, quota, permission; exit 127, "command not found",
+  "executable file not found"; `Retry-After` values.
 - Steps: classify each error; compute delays.
-- Expected: timeouts, resets, 429 and 5xx retry; 401/403/quota/permission do not;
+- Expected: timeouts, resets, 429 and 5xx retry; 401/403/quota/permission do not; a missing
+  program is `environment` and never retries;
   `Retry-After` up to 300 s is honoured; backoff doubles up to 16× the base; a cancelled
   wait stops at once.
 

@@ -81,6 +81,13 @@ A failed start (not a git repository, an unknown driver, no command, agent exite
 a `run` record with the stage that failed, and the task goes to `failed`. A task that is not
 `ready`, or still waits on a dependency, is not run and stays as it was.
 
+A tool the checks need but the worker does not have is an **environment** failure, not three
+attempts of a model: before the first attempt the runner resolves the program of every check —
+`exec.LookPath` on the host, `command -v` through the sandbox when there is one — and a missing
+one ends the run at once with `failure_class: environment`, `error_code: environment_missing_tool`,
+a `run` record naming the tool and the check, and no call to the driver. A check that exits 127
+at run time, or an agent command that is not installed, gets the same class and is never retried.
+
 ## Worker: the bridge to trilha-cloud
 
 ```bash
