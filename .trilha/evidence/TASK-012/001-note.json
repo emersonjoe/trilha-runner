@@ -1,0 +1,10 @@
+{
+  "task": "TASK-012",
+  "seq": 1,
+  "kind": "note",
+  "at": "2026-10-21T02:38:51Z",
+  "by": "cli",
+  "exit_code": 0,
+  "passed": true,
+  "note": "RM-003. Fixture e schema copiados byte a byte de trilha-spec main; queue.Attempt/runner.Attempt com provider, tokens_in, tokens_out, cost, currency e error_code; teste de contrato com ida e volta; job conformance no ci.yml. Evidência: bash ../trilha-spec/scripts/check-execution-contract.sh → 'trilha-runner execution contract matches v1', exit 0; make conformance ok; go test ./queue ok. Commit 70ab200."
+}

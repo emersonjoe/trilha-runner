@@ -1,0 +1,10 @@
+{
+  "task": "TASK-011",
+  "seq": 1,
+  "kind": "note",
+  "at": "2026-10-21T02:38:51Z",
+  "by": "cli",
+  "exit_code": 0,
+  "passed": true,
+  "note": "RM-002. release.yml (tags v*): verify (TestVersionMatchesTag com RELEASE_TAG + make test) → build matriz linux/darwin × amd64/arm64 com -trimpath -ldflags '-s -w -X main.version=X.Y.Z' → publish com sha256sums.txt e seção do CHANGELOG via gh release create; ações fixadas por SHA. version virou var. Evidência: RELEASE_TAG=v9.9.9 go test ./cmd/trilha-runner -run TestVersionMatchesTag → FAIL (esperado); RELEASE_TAG=v0.4.0 → ok. Commit d309112. Tag v0.4.0 não criada (decisão humana)."
+}

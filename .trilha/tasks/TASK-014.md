@@ -1,7 +1,7 @@
 ---
 id: TASK-014
 title: "RM-008: driver_versions com versões reais de claude e codex"
-status: ready
+status: review
 spec: 004-fase-0-coerencia
 agent: coder
 depends_on: []
@@ -10,5 +10,5 @@ acceptance:
 checks:
   - make test
 created: "2026-10-21T02:17:21Z"
-updated: "2026-10-21T02:17:21Z"
+updated: "2026-10-21T02:38:51Z"
 ---

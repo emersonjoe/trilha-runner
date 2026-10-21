@@ -1,7 +1,7 @@
 ---
 id: TASK-010
 title: "RM-007: prontidão do Postgres por TCP e -count=20 verde"
-status: ready
+status: review
 spec: 004-fase-0-coerencia
 agent: coder
 depends_on: []
@@ -11,5 +11,5 @@ acceptance:
 checks:
   - make test
 created: "2026-10-21T02:17:21Z"
-updated: "2026-10-21T02:17:21Z"
+updated: "2026-10-21T02:38:51Z"
 ---

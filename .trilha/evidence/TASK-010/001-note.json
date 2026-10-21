@@ -1,0 +1,10 @@
+{
+  "task": "TASK-010",
+  "seq": 1,
+  "kind": "note",
+  "at": "2026-10-21T02:38:51Z",
+  "by": "cli",
+  "exit_code": 0,
+  "passed": true,
+  "note": "RM-007. Causa: prontidão pg_isready -U postgres pelo socket Unix respondia durante o servidor temporário do initdb; o agente chegava por TCP e via 'db:5432 - no response' (CI main 2026-10-15, run 38740540623). Correção: prontidão por TCP (pg_isready -h localhost) no teste, README e catálogo (commit 71ed600). Evidência: go test ./sandbox -run TestDockerPostgresAndTeardown -count=20 → 20/20 PASS em 60.6 s (Docker 29, macOS)."
+}

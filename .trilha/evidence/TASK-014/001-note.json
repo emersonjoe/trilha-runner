@@ -1,0 +1,10 @@
+{
+  "task": "TASK-014",
+  "seq": 1,
+  "kind": "note",
+  "at": "2026-10-21T02:38:51Z",
+  "by": "cli",
+  "exit_code": 0,
+  "passed": true,
+  "note": "RM-008. driverVersions resolve claude --version e codex --version uma vez na subida (timeout 3 s, WaitDelay 500 ms, primeira linha, 'unknown' na falta); echo e ai mantêm a versão do runner. Teste com binários falsos no PATH: TestDriverVersionsComeFromTheBinariesOnPath (go test -race -count=5 ok). Commits c1db632, 9462816."
+}

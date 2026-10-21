@@ -1,7 +1,7 @@
 ---
 id: TASK-015
 title: "RM-004: estado honesto das specs e tasks"
-status: ready
+status: review
 spec: 004-fase-0-coerencia
 agent: coder
 depends_on: []
@@ -10,5 +10,5 @@ acceptance:
 checks:
   - trilha-spec doctor
 created: "2026-10-21T02:17:21Z"
-updated: "2026-10-21T02:17:21Z"
+updated: "2026-10-21T02:38:51Z"
 ---
