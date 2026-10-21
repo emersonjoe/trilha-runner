@@ -6,6 +6,13 @@ This project follows semantic versioning.
 
 ### Fixed
 
+- The Docker sandbox case `TestDockerPostgresAndTeardown` failed on `main` (2026-10-15) with
+  `db:5432 - no response` after readiness had passed: `pg_isready -U postgres` inside the service
+  container answers on the Unix socket while the postgres image still runs `initdb`'s temporary
+  server, which listens on no TCP port, and the agent reached the service in the gap before the
+  real server listened. The readiness example in the README, the test and the catalog now probe
+  over TCP (`pg_isready -h localhost -U postgres`), the way the agent reaches the service; twenty
+  consecutive runs pass (roadmap RM-007).
 - A run that could not start because the project is not a git repository, or because the
   agent manifest names an unknown driver, returned an error and left the task `ready` with no
   evidence — against principle III and what the README promised. The task now goes

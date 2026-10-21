@@ -105,8 +105,13 @@ valor de `services` é JSON):
 ```yaml
 sandbox:
   image: ghcr.io/acme/app-ci:latest
-  services: '[{"name":"db","image":"pgvector/pgvector:pg16","env":{"POSTGRES_PASSWORD":"test"},"ready":["pg_isready","-U","postgres"]}]'
+  services: '[{"name":"db","image":"pgvector/pgvector:pg16","env":{"POSTGRES_PASSWORD":"test"},"ready":["pg_isready","-h","localhost","-U","postgres"]}]'
 ```
+
+`ready` roda dentro do container do serviço até sair zero. Sonde o serviço pela via que o agente
+vai usar — TCP, `pg_isready -h localhost` — porque uma sonda pelo socket Unix responde enquanto o
+Postgres ainda roda o servidor temporário do `initdb`, e o agente então encontra
+`db:5432 - no response`.
 
 O runner cria uma rede privada, sobe os serviços declarados, monta só o worktree em
 `/workspace` e executa drivers externos e checks por `docker exec`. CPU, memória, PIDs, raiz

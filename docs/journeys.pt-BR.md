@@ -325,7 +325,8 @@ Pior impacto: o agente escapa do worktree, roda como root, ou containers ficam p
 - Recursos: Docker (obrigatório no CI via `TRILHA_REQUIRE_DOCKER=1`; fora dele, sem Docker,
   é pulado dizendo por quê).
 - Pré-condições: um daemon Docker acessível.
-- Dados: imagem `postgres:16-alpine` com serviço `db` e prontidão `pg_isready`.
+- Dados: imagem `postgres:16-alpine` com serviço `db` e prontidão `pg_isready -h localhost`
+  (por TCP, a via pela qual o agente chega).
 - Passos: preparar o sandbox, rodar comandos pelo prefixo, liberar.
 - Esperado: `pg_isready` responde; o agente roda como o usuário do host; só o worktree é
   gravável; nenhum container ou rede sobra depois da liberação.

@@ -322,7 +322,8 @@ Worst impact: the agent escapes the worktree, runs as root, or containers are le
 - Resources: Docker (required in CI through `TRILHA_REQUIRE_DOCKER=1`; skipped elsewhere
   without it, saying so).
 - Preconditions: a reachable Docker daemon.
-- Data: image `postgres:16-alpine` with a `db` service and `pg_isready` readiness.
+- Data: image `postgres:16-alpine` with a `db` service and `pg_isready -h localhost` readiness
+  (over TCP, the way the agent reaches it).
 - Steps: prepare the sandbox, run commands through its prefix, release it.
 - Expected: `pg_isready` answers; the agent runs as the host user; only the worktree is
   writable; no container or network remains after release.
