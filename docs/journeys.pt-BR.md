@@ -127,6 +127,21 @@ U `TestAIRejectsForbiddenHostBeforeCallingProvider`
 - Passos: rodar `TASK-002`.
 - Esperado: erro citando a dependência; a task continua `ready`; nenhuma evidência.
 
+**J2.8 Ferramenta ausente é falha de ambiente, não três tentativas** — I `TestMissingCheckToolFailsBeforeTheDriverRuns`,
+`TestMissingCheckToolInsideTheSandboxFailsBeforeTheDriverRuns`, `TestCheckExitingWith127IsAnEnvironmentFailureWithoutRetry`
+- Recursos: git, sh; um prefixo de sandbox falso (um script no lugar do `docker exec`).
+- Pré-condições: uma task `ready` cujo check chama um programa que o worker não tem; ou um
+  sandbox cujo `command -v` responde 127; ou um check que sai com 127 em tempo de execução.
+- Dados: checks `trilha-no-such-tool-0a1b2c --version`, `python -c 'import app'` (sandbox),
+  `sh -c trilha-no-such-tool-0a1b2c`; um driver roteirizado que conta as chamadas.
+- Passos: rodar a task.
+- Esperado: `failed` depois de uma tentativa com `failure_class: environment` e
+  `error_code: environment_missing_tool` no resultado, na tentativa e no registro `run`, que cita
+  a ferramenta e o check; o driver nunca é chamado quando o preflight pega; no sandbox a busca é
+  `sh -c 'command -v "$1"' sh PROGRAMA` pelo prefixo e o host não é consultado; um 127 durante a
+  verificação recebe a mesma classe, o driver rodou uma vez e nenhuma tentativa corretiva segue
+  (issues #13, #14).
+
 ## J3 — Segredos nunca vazam · crítica
 
 *A credencial do projeto chega ao agente e a mais nenhum lugar.*
@@ -202,7 +217,9 @@ que o cloud não lê.
 - Dados: uma reivindicação, um resultado, um heartbeat; a fixture `execution-v1`.
 - Passos: reivindicar, reportar, heartbeat.
 - Esperado: `Authorization: Bearer`; 204 é fila vazia; o resultado bate com a fixture
-  `execution-v1` do `trilha-spec`.
+  `execution-v1` do `trilha-spec` (copiada byte a byte, `make conformance`, também um job de CI),
+  volta campo a campo depois de uma ida e volta, e uma tentativa mantém seu custo sob os nomes do
+  protocolo: `provider`, `tokens_in`, `tokens_out`, `cost`, `currency`.
 
 **J5.2 Capacidade** — I `TestWorkerCapacityClaimsThirdOnlyAfterOneFinishes`
 - Recursos: httptest.
@@ -260,6 +277,16 @@ que o cloud não lê.
 - Esperado: a reivindicação leva worker e projeto; 204 é fila vazia; trabalho de outro
   projeto, ou sem id ou perfil, é recusado; o relatório sempre leva este worker e projeto
   (valor posto por quem chama é sobrescrito) e nunca os segredos da reivindicação.
+
+**J5.9 O heartbeat diz quais agentes o worker tem** — U `TestDriverVersionsComeFromTheBinariesOnPath`
+- Recursos: sh; binários falsos num PATH privado.
+- Pré-condições: um script `claude` que imprime `1.2.3 (Claude Code)`; um script `codex` que dorme
+  além do timeout; depois um PATH vazio.
+- Dados: os nomes dos drivers; timeout de 2 s contra um sleep de 30 s.
+- Passos: resolver `driver_versions` como o `cmdWorker` faz na subida.
+- Esperado: `claude-code` e `claude` são `1.2.3 (Claude Code)` (só a primeira linha); `codex` é
+  `unknown` e a busca volta bem antes de 3 s; `echo`, `ai` e `exec` levam a versão do próprio
+  runner; sem nada no PATH todo agente é `unknown` e o runner ainda sabe quem é.
 
 ## J6 — Trabalho criado na UI (bundles) · alta
 
@@ -325,7 +352,8 @@ Pior impacto: o agente escapa do worktree, roda como root, ou containers ficam p
 - Recursos: Docker (obrigatório no CI via `TRILHA_REQUIRE_DOCKER=1`; fora dele, sem Docker,
   é pulado dizendo por quê).
 - Pré-condições: um daemon Docker acessível.
-- Dados: imagem `postgres:16-alpine` com serviço `db` e prontidão `pg_isready`.
+- Dados: imagem `postgres:16-alpine` com serviço `db` e prontidão `pg_isready -h localhost`
+  (por TCP, a via pela qual o agente chega).
 - Passos: preparar o sandbox, rodar comandos pelo prefixo, liberar.
 - Esperado: `pg_isready` responde; o agente roda como o usuário do host; só o worktree é
   gravável; nenhum container ou rede sobra depois da liberação.
@@ -400,9 +428,11 @@ credencial.
 **J9.1 Classificação e backoff** — U `TestClassifyRetry`, `TestRetryDelay`, `TestWaitRetryStopsOnCancel`
 - Recursos: nenhum.
 - Pré-condições: nenhuma.
-- Dados: timeouts, resets, 429, 5xx, 401, 403, quota, permission; valores de `Retry-After`.
+- Dados: timeouts, resets, 429, 5xx, 401, 403, quota, permission; exit 127, "command not found",
+  "executable file not found"; valores de `Retry-After`.
 - Passos: classificar cada erro; calcular as esperas.
-- Esperado: timeout, reset, 429 e 5xx tentam de novo; 401/403/quota/permission não;
+- Esperado: timeout, reset, 429 e 5xx tentam de novo; 401/403/quota/permission não; programa
+  ausente é `environment` e nunca repete;
   `Retry-After` até 300 s é respeitado; o backoff dobra até 16× a base; uma espera cancelada
   para na hora.
 
@@ -455,6 +485,17 @@ Pior impacto: um agente que escreve ou executa fora do seu worktree.
 - Dados: a constante `version`.
 - Passos: comparar as duas.
 - Esperado: iguais; uma seção `Unreleased` não conta.
+
+**J11.2 Uma tag só publica a versão que nomeia** — U `TestVersionMatchesTag`
+- Recursos: nenhum (o `release.yml` roda o teste antes de compilar qualquer coisa).
+- Pré-condições: `release.yml` disparado por uma tag `vX.Y.Z`; `RELEASE_TAG` com essa tag.
+- Dados: `RELEASE_TAG=v9.9.9` contra `version` `0.4.0`; `RELEASE_TAG=v0.4.0`; sem `RELEASE_TAG`.
+- Passos: rodar o teste com cada valor.
+- Esperado: tag diferente falha citando os dois valores, então nenhum binário é compilado nem
+  publicado; tag igual passa; sem a variável o teste só exige que `version` seja
+  `MAJOR.MINOR.PATCH`. A release então leva quatro binários estáticos (`linux`/`darwin` ×
+  `amd64`/`arm64`, compilados com `-trimpath -ldflags "-s -w -X main.version=X.Y.Z"`),
+  `sha256sums.txt` e a seção do CHANGELOG daquela versão como notas.
 
 ## J12 — A suíte se mantém honesta · média
 

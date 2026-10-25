@@ -52,6 +52,11 @@
         "model": { "type": "string" },
         "total_tokens": { "type": "integer", "minimum": 0 },
         "estimated_cost": { "type": "number", "minimum": 0 },
+        "provider": { "type": "string" },
+        "tokens_in": { "type": "integer", "minimum": 0 },
+        "tokens_out": { "type": "integer", "minimum": 0 },
+        "cost": { "type": "number", "minimum": 0 },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
         "started": { "type": "string", "format": "date-time" },
         "finished": { "type": "string", "format": "date-time" }
       },

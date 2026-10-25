@@ -124,6 +124,21 @@ U `TestAIRejectsForbiddenHostBeforeCallingProvider`
 - Steps: run `TASK-002`.
 - Expected: an error naming the dependency; the task stays `ready`; no evidence.
 
+**J2.8 A missing tool is an environment failure, not three attempts** — I `TestMissingCheckToolFailsBeforeTheDriverRuns`,
+`TestMissingCheckToolInsideTheSandboxFailsBeforeTheDriverRuns`, `TestCheckExitingWith127IsAnEnvironmentFailureWithoutRetry`
+- Resources: git, sh; a fake sandbox prefix (a script standing in for `docker exec`).
+- Preconditions: a `ready` task whose check calls a program the worker does not have; or a
+  sandbox whose `command -v` answers 127; or a check that exits 127 at run time.
+- Data: checks `trilha-no-such-tool-0a1b2c --version`, `python -c 'import app'` (sandbox),
+  `sh -c trilha-no-such-tool-0a1b2c`; a scripted driver that counts its calls.
+- Steps: run the task.
+- Expected: `failed` after one attempt with `failure_class: environment` and
+  `error_code: environment_missing_tool` on the result, on the attempt and in the `run` record,
+  which names the tool and the check; the driver is never called when preflight catches it; in
+  the sandbox the lookup is `sh -c 'command -v "$1"' sh PROGRAM` through the prefix and the host is
+  not consulted; an exit 127 during verification gets the same class, the driver ran once and
+  no corrective attempt follows (issues #13, #14).
+
 ## J3 — Secrets never leak · critical
 
 *A project credential reaches the agent and nowhere else.*
@@ -198,7 +213,9 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
 - Data: a claim, a result, a heartbeat; the `execution-v1` fixture.
 - Steps: claim, report, heartbeat.
 - Expected: `Authorization: Bearer`; 204 is an empty queue; the result matches the
-  `execution-v1` fixture of `trilha-spec`.
+  `execution-v1` fixture of `trilha-spec` (copied byte for byte, `make conformance`, also a CI
+  job), reads back field for field after a round trip, and an attempt keeps its cost under the
+  protocol's names: `provider`, `tokens_in`, `tokens_out`, `cost`, `currency`.
 
 **J5.2 Capacity** — I `TestWorkerCapacityClaimsThirdOnlyAfterOneFinishes`
 - Resources: httptest.
@@ -257,6 +274,16 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
 - Expected: the claim carries worker and project; 204 is an empty queue; work for another
   project, or without id or profile, is refused; the report always carries this worker and
   project (a value set by the caller is overwritten) and never the claim's secrets.
+
+**J5.9 The heartbeat says which agents the worker has** — U `TestDriverVersionsComeFromTheBinariesOnPath`
+- Resources: sh; fake binaries on a private PATH.
+- Preconditions: a `claude` script that prints `1.2.3 (Claude Code)`; a `codex` script that sleeps
+  past the timeout; then an empty PATH.
+- Data: the driver names; a 2 s timeout against a 30 s sleep.
+- Steps: resolve `driver_versions` the way `cmdWorker` does at startup.
+- Expected: `claude-code` and `claude` are `1.2.3 (Claude Code)` (first line only); `codex` is
+  `unknown` and the lookup returns well before 3 s; `echo`, `ai` and `exec` carry the runner's
+  own version; with nothing on PATH every agent is `unknown` and the runner still knows itself.
 
 ## J6 — Work created in the UI (bundles) · high
 
@@ -322,7 +349,8 @@ Worst impact: the agent escapes the worktree, runs as root, or containers are le
 - Resources: Docker (required in CI through `TRILHA_REQUIRE_DOCKER=1`; skipped elsewhere
   without it, saying so).
 - Preconditions: a reachable Docker daemon.
-- Data: image `postgres:16-alpine` with a `db` service and `pg_isready` readiness.
+- Data: image `postgres:16-alpine` with a `db` service and `pg_isready -h localhost` readiness
+  (over TCP, the way the agent reaches it).
 - Steps: prepare the sandbox, run commands through its prefix, release it.
 - Expected: `pg_isready` answers; the agent runs as the host user; only the worktree is
   writable; no container or network remains after release.
@@ -394,9 +422,11 @@ Worst impact: a run abandoned for a hiccup, or hammering a provider that refused
 **J9.1 Classification and backoff** — U `TestClassifyRetry`, `TestRetryDelay`, `TestWaitRetryStopsOnCancel`
 - Resources: none.
 - Preconditions: none.
-- Data: timeouts, resets, 429, 5xx, 401, 403, quota, permission; `Retry-After` values.
+- Data: timeouts, resets, 429, 5xx, 401, 403, quota, permission; exit 127, "command not found",
+  "executable file not found"; `Retry-After` values.
 - Steps: classify each error; compute delays.
-- Expected: timeouts, resets, 429 and 5xx retry; 401/403/quota/permission do not;
+- Expected: timeouts, resets, 429 and 5xx retry; 401/403/quota/permission do not; a missing
+  program is `environment` and never retries;
   `Retry-After` up to 300 s is honoured; backoff doubles up to 16× the base; a cancelled
   wait stops at once.
 
@@ -449,6 +479,17 @@ Worst impact: an agent that writes or runs outside its worktree.
 - Data: the `version` constant.
 - Steps: compare them.
 - Expected: equal; an `Unreleased` section does not count.
+
+**J11.2 A tag only releases the version it names** — U `TestVersionMatchesTag`
+- Resources: none (`release.yml` runs it before building anything).
+- Preconditions: `release.yml` triggered by a tag `vX.Y.Z`; `RELEASE_TAG` set to that tag.
+- Data: `RELEASE_TAG=v9.9.9` against `version` `0.4.0`; `RELEASE_TAG=v0.4.0`; no `RELEASE_TAG`.
+- Steps: run the test with each value.
+- Expected: a mismatched tag fails naming both values, so no binary is built or published; the
+  matching tag passes; without the variable the test only requires `version` to be
+  `MAJOR.MINOR.PATCH`. The release then carries four static binaries (`linux`/`darwin` ×
+  `amd64`/`arm64`, built with `-trimpath -ldflags "-s -w -X main.version=X.Y.Z"`),
+  `sha256sums.txt` and the CHANGELOG section of that version as the notes.
 
 ## J12 — The suite keeps itself honest · medium
 

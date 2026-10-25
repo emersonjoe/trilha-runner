@@ -14,7 +14,7 @@ import (
 )
 
 func TestFromAgent(t *testing.T) {
-	document, err := spec.Parse([]byte("---\nsandbox:\n  image: postgres:16-alpine\n  services: '[{\"name\":\"db\",\"image\":\"postgres:16-alpine\",\"env\":{\"POSTGRES_PASSWORD\":\"test\"},\"ready\":[\"pg_isready\",\"-U\",\"postgres\"]}]'\n---\n"))
+	document, err := spec.Parse([]byte("---\nsandbox:\n  image: postgres:16-alpine\n  services: '[{\"name\":\"db\",\"image\":\"postgres:16-alpine\",\"env\":{\"POSTGRES_PASSWORD\":\"test\"},\"ready\":[\"pg_isready\",\"-h\",\"localhost\",\"-U\",\"postgres\"]}]'\n---\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,12 @@ func TestDockerPostgresAndTeardown(t *testing.T) {
 		t.Skip("Docker is unavailable")
 	}
 	ctx := context.Background()
-	docker := Docker{Image: "postgres:16-alpine", Services: []Service{{Name: "db", Image: "postgres:16-alpine", Env: map[string]string{"POSTGRES_PASSWORD": "test"}, Ready: []string{"pg_isready", "-U", "postgres"}}}}
+	// Readiness goes over TCP, the way the agent reaches the service. The
+	// postgres image answers `pg_isready` on the Unix socket while initdb's
+	// temporary server (listen_addresses='') is still up; a probe without -h
+	// passed then, and the agent got `db:5432 - no response` in the gap before
+	// the real server listened (main, 2026-10-15).
+	docker := Docker{Image: "postgres:16-alpine", Services: []Service{{Name: "db", Image: "postgres:16-alpine", Env: map[string]string{"POSTGRES_PASSWORD": "test"}, Ready: []string{"pg_isready", "-h", "localhost", "-U", "postgres"}}}}
 	worktree := t.TempDir()
 	environment, release, err := docker.Prepare(ctx, worktree, []string{"TRILHA_TASK=TASK-001"})
 	if err != nil {

@@ -1,7 +1,7 @@
 ---
 id: 002-sincronizar-trabalho-do-cloud-em-repositorios-reais
 title: Sincronizar trabalho do Cloud em repositorios reais
-status: approved
+status: done
 ---
 
 # Sincronizar trabalho do Cloud em repositorios reais

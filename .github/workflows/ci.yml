@@ -68,3 +68,21 @@ jobs:
         with:
           go-version: "1.25"
       - run: make host
+  # The wire contract with trilha-cloud is trilha-spec's execution-v1 fixture
+  # and schema, byte for byte (docs/testing.md). The sibling checkout sits
+  # where the Makefile expects it: ../trilha-spec.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: trilha-runner
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: emersonjoe/trilha-spec
+          ref: main
+          path: trilha-spec
+          persist-credentials: false
+      - run: make conformance
+        working-directory: trilha-runner

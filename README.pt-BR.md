@@ -20,9 +20,27 @@ nunca é tocada.
 
 ## Instalar e rodar
 
+Com Go:
+
 ```bash
 go install github.com/emersonjoe/trilha-runner/cmd/trilha-runner@latest
+```
 
+Sem Go, toda release traz um binário estático por plataforma (`linux`/`darwin` ×
+`amd64`/`arm64`) e um `sha256sums.txt`:
+
+```bash
+v=0.5.0; os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
+curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/trilha-runner_${v}_${os}_${arch}"
+curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/sha256sums.txt"
+sha256sum --check --ignore-missing sha256sums.txt      # shasum -a 256 --check no macOS
+install -m 0755 "trilha-runner_${v}_${os}_${arch}" /usr/local/bin/trilha-runner
+trilha-runner version
+```
+
+Depois, num projeto:
+
+```bash
 # Num repositório git com .trilha/ (trilha-spec init):
 trilha-runner next                          # primeira task executável, agente do manifesto
 trilha-runner run TASK-003 --driver exec --cmd "claude -p -"
@@ -64,6 +82,13 @@ Uma partida que falha (sem repositório git, driver desconhecido, sem comando, a
 erro) é um registro `run` com o estágio que falhou, e a task vai para `failed`. Uma task que não
 está `ready`, ou ainda espera uma dependência, não roda e fica como estava.
 
+Uma ferramenta que os checks precisam mas o worker não tem é falha de **ambiente**, não três
+tentativas de um modelo: antes da primeira tentativa o runner resolve o programa de cada check —
+`exec.LookPath` no host, `command -v` pelo sandbox quando há um — e um que falte encerra a execução
+na hora com `failure_class: environment`, `error_code: environment_missing_tool`, um registro `run`
+citando a ferramenta e o check, e nenhuma chamada ao driver. Um check que sai com 127 em tempo de
+execução, ou um comando de agente que não está instalado, recebe a mesma classe e nunca é repetido.
+
 ## Worker: a ponte para o trilha-cloud
 
 ```bash
@@ -77,8 +102,10 @@ Um worker é um processo num checkout. Pede ao control plane a próxima execuç�
 (`POST /api/runs/next`), executa localmente exatamente como acima e reporta resultado e
 evidência (`POST /api/runs/{id}/result`). O código não sai da máquina; o cloud vê status,
 branch, commit e evidência. `queue.Remote` é o contrato inteiro, então outro control plane
-pode implementá-lo. Heartbeat e claim carregam labels, capacidade, runs ativas e versões do
-runner e dos drivers. Cada run pode carregar um objeto `ai` transitório com provedor, URL base,
+pode implementá-lo. Heartbeat e claim carregam labels, capacidade, runs ativas, a versão do
+runner e `driver_versions`: o que `claude --version` e `codex --version` respondem neste worker,
+resolvido uma vez na subida com timeout de 3 s (`unknown` quando o binário falta ou não
+responde; `echo` e `ai` são o próprio runner). Cada run pode carregar um objeto `ai` transitório com provedor, URL base,
 modelo, credencial e hosts permitidos; a credencial nunca é persistida.
 
 Dependências entre repositórios usam `depends_on: alias:TASK-NNN`. A execução local resolve os
@@ -105,8 +132,13 @@ valor de `services` é JSON):
 ```yaml
 sandbox:
   image: ghcr.io/acme/app-ci:latest
-  services: '[{"name":"db","image":"pgvector/pgvector:pg16","env":{"POSTGRES_PASSWORD":"test"},"ready":["pg_isready","-U","postgres"]}]'
+  services: '[{"name":"db","image":"pgvector/pgvector:pg16","env":{"POSTGRES_PASSWORD":"test"},"ready":["pg_isready","-h","localhost","-U","postgres"]}]'
 ```
+
+`ready` roda dentro do container do serviço até sair zero. Sonde o serviço pela via que o agente
+vai usar — TCP, `pg_isready -h localhost` — porque uma sonda pelo socket Unix responde enquanto o
+Postgres ainda roda o servidor temporário do `initdb`, e o agente então encontra
+`db:5432 - no response`.
 
 O runner cria uma rede privada, sobe os serviços declarados, monta só o worktree em
 `/workspace` e executa drivers externos e checks por `docker exec`. CPU, memória, PIDs, raiz

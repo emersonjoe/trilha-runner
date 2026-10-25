@@ -2,10 +2,31 @@
 
 This project follows semantic versioning.
 
-## Unreleased
+## 0.5.0 — 2026-10-21
 
 ### Fixed
 
+- `driver_versions` on the claim and the heartbeat repeated the runner's own version for every
+  driver, so the fleet panel could not tell which `claude` or `codex` a worker had. The worker
+  now runs `claude --version` and `codex --version` once at startup, with a 3-second timeout,
+  and reports their first line (`unknown` when the binary is absent or silent); `echo` and `ai`
+  keep the runner's version (roadmap RM-008).
+- A tool the checks need but the worker does not have burned every attempt of the model
+  (acervo `run-000007` spent three because `python` was missing; issues #13, #14). Before the
+  first attempt the runner now resolves the program of every check — `exec.LookPath` on the
+  host, `command -v` through the sandbox prefix when there is one — and a missing one ends the
+  run at once: one attempt, no driver call, `failure_class: environment`,
+  `error_code: environment_missing_tool`, a `run` record naming the tool and the check. Exit
+  status 127, "command not found" and "executable file not found" during execution or
+  verification get the same class, and the retry policy never retries an `environment` failure
+  (roadmap RM-014).
+- The Docker sandbox case `TestDockerPostgresAndTeardown` failed on `main` (2026-10-15) with
+  `db:5432 - no response` after readiness had passed: `pg_isready -U postgres` inside the service
+  container answers on the Unix socket while the postgres image still runs `initdb`'s temporary
+  server, which listens on no TCP port, and the agent reached the service in the gap before the
+  real server listened. The readiness example in the README, the test and the catalog now probe
+  over TCP (`pg_isready -h localhost -U postgres`), the way the agent reaches the service; twenty
+  consecutive runs pass (roadmap RM-007).
 - A run that could not start because the project is not a git repository, or because the
   agent manifest names an unknown driver, returned an error and left the task `ready` with no
   evidence — against principle III and what the README promised. The task now goes
@@ -23,6 +44,25 @@ This project follows semantic versioning.
 
 ### Added
 
+- `.trilha/` tells the truth about what shipped: spec 002 (Cloud bundles in real repositories,
+  0.2.0) is `done`; TASK-007 "Container sandbox" (0.3.0) is `done` with an evidence note pointing at
+  the 0.3.0 changelog; TASK-006 (open a PR after review) stays an idea and names roadmap RM-030
+  (roadmap RM-004).
+- The execution contract is conformant again: `testdata/contracts/execution-v1.json` and
+  `execution-v1.schema.json` are byte for byte trilha-spec's canonical fixture and schema, and
+  `queue.Attempt` / `runner.Attempt` carry an attempt's cost under the protocol's names
+  (`provider`, `tokens_in`, `tokens_out`, `cost`, `currency`), filled from what the driver
+  reports and proven by the contract test to survive a round trip. `error_code` now travels
+  on the result and on each attempt. A `conformance` CI job checks out `emersonjoe/trilha-spec`
+  (`main`) as a sibling and runs `make conformance`, so the fixtures cannot drift silently
+  (roadmap RM-003).
+- `.github/workflows/release.yml`: a tag `vX.Y.Z` builds static binaries for linux/amd64,
+  linux/arm64, darwin/amd64 and darwin/arm64 with `-trimpath -ldflags "-s -w -X main.version=X.Y.Z"`,
+  publishes them with `sha256sums.txt` and the CHANGELOG section of that version as the release
+  notes. Nothing is built before `TestVersionMatchesTag` proves the tag is the version in
+  `cmd/trilha-runner/main.go` (`version` is now a `var`, overridable at link time) and `make test`
+  is green; actions are pinned by SHA like `ci.yml`. The README shows the install path without Go
+  (roadmap RM-002).
 - IBM's seven end-to-end testing practices, applied (`docs/testing.md`): every case in the
   journey catalog states resources, preconditions, data, steps and expected; `internal/catalog`
   fails the suite when a case is incomplete, cites a missing test, a test belongs to no case,

@@ -23,9 +23,12 @@ import (
 	"github.com/emersonjoe/trilha-runner/worktree"
 )
 
-const version = "0.4.0"
+// version is the release this binary is. It is a var so a release build can
+// set it at link time (`-ldflags "-X main.version=0.4.0"`); the source value
+// is what `go install` reports and what the changelog test pins.
+var version = "0.5.0"
 
-const usage = `trilha-runner ` + version + ` — executes tasks of the Trilha protocol
+var usage = `trilha-runner ` + version + ` — executes tasks of the Trilha protocol
 
 usage: trilha-runner <command> [flags]
 
@@ -229,10 +232,7 @@ func cmdWorker(ctx context.Context, args []string, out io.Writer) error {
 	if *capacity < 1 {
 		return errors.New("worker capacity must be at least 1")
 	}
-	versions := map[string]string{}
-	for _, name := range driver.Names() {
-		versions[name] = version
-	}
+	versions := driverVersions(ctx, driver.Names(), versionTimeout)
 	// q is built before newRunner so a startup failure — missing .trilha/,
 	// a bad delivery config — has somewhere to report itself: the fleet
 	// panel otherwise just sees the last good heartbeat and calls it fine.

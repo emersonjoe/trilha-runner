@@ -17,6 +17,10 @@ func classifyRetry(err error) (string, bool) {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return "cancelled", false
+	case isEnvironmentFailure(value):
+		// A program the run needs is not installed. Asking the agent again
+		// installs nothing, so this never retries (#13, #14).
+		return "environment", false
 	case errors.Is(err, context.DeadlineExceeded), strings.Contains(value, "timeout"), strings.Contains(value, "connection reset"):
 		return "provider_transient", true
 	case strings.Contains(value, "quota"), strings.Contains(value, "401"), strings.Contains(value, "403"), strings.Contains(value, "unauthorized"), strings.Contains(value, "permission"):
@@ -91,4 +95,30 @@ func containsAny(value string, candidates ...string) bool {
 		}
 	}
 	return false
+}
+
+// Failure classes and error codes the runner emits beyond the provider ones.
+const (
+	// failureEnvironment is a worker that lacks something the run needs: a
+	// tool a check calls, the agent's own binary. It is never retried.
+	failureEnvironment = "environment"
+	// errorMissingTool is the error_code next to failureEnvironment when the
+	// missing thing is a program — the vocabulary of protocol spec 014.
+	errorMissingTool = "environment_missing_tool"
+)
+
+// isEnvironmentFailure answers whether an error, lower-cased, says a program
+// is not installed: exit status 127 (the shell's "command not found"), the
+// words the shells use for it, or Go's own when exec cannot find a binary.
+func isEnvironmentFailure(value string) bool {
+	return containsAny(value, "exit status 127", "exited 127", "command not found", "executable file not found")
+}
+
+// errorCodeFor answers the error_code that accompanies a failure class, or
+// "" when the class carries no finer detail.
+func errorCodeFor(failureClass string) string {
+	if failureClass == failureEnvironment {
+		return errorMissingTool
+	}
+	return ""
 }

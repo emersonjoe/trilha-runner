@@ -1,11 +1,12 @@
 ---
 id: TASK-007
 title: Container sandbox
-status: idea
+status: done
 depends_on:
   - TASK-003
 acceptance:
   - sandbox.Docker prepares a container with the worktree mounted
 checks: []
 created: "2026-09-12T23:19:29Z"
+updated: "2026-10-21T02:35:07Z"
 ---

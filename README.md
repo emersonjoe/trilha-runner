@@ -20,9 +20,27 @@ Your working copy is never touched.
 
 ## Install and run
 
+With Go:
+
 ```bash
 go install github.com/emersonjoe/trilha-runner/cmd/trilha-runner@latest
+```
 
+Without Go, every release carries one static binary per platform (`linux`/`darwin` ×
+`amd64`/`arm64`) and a `sha256sums.txt`:
+
+```bash
+v=0.5.0; os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
+curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/trilha-runner_${v}_${os}_${arch}"
+curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/sha256sums.txt"
+sha256sum --check --ignore-missing sha256sums.txt      # shasum -a 256 --check on macOS
+install -m 0755 "trilha-runner_${v}_${os}_${arch}" /usr/local/bin/trilha-runner
+trilha-runner version
+```
+
+Then, in a project:
+
+```bash
 # In a git repository with .trilha/ (trilha-spec init):
 trilha-runner next                          # first executable task, agent from its manifest
 trilha-runner run TASK-003 --driver exec --cmd "claude -p -"
@@ -63,6 +81,13 @@ A failed start (not a git repository, an unknown driver, no command, agent exite
 a `run` record with the stage that failed, and the task goes to `failed`. A task that is not
 `ready`, or still waits on a dependency, is not run and stays as it was.
 
+A tool the checks need but the worker does not have is an **environment** failure, not three
+attempts of a model: before the first attempt the runner resolves the program of every check —
+`exec.LookPath` on the host, `command -v` through the sandbox when there is one — and a missing
+one ends the run at once with `failure_class: environment`, `error_code: environment_missing_tool`,
+a `run` record naming the tool and the check, and no call to the driver. A check that exits 127
+at run time, or an agent command that is not installed, gets the same class and is never retried.
+
 ## Worker: the bridge to trilha-cloud
 
 ```bash
@@ -77,7 +102,9 @@ A worker is one process on one checkout. It asks the control plane for the next 
 evidence (`POST /api/runs/{id}/result`). The code never leaves the machine; the cloud sees
 status, branch, commit and evidence. `queue.Remote` is the whole contract, so another control
 plane can implement it. Heartbeat and claim requests carry labels, capacity, active-run count,
-runner version and driver versions. Each claimed run may carry a transient `ai` object with
+the runner version and `driver_versions`: what `claude --version` and `codex --version` answer on
+this worker, resolved once at startup with a 3-second timeout (`unknown` when the binary is
+absent or silent; `echo` and `ai` are the runner itself). Each claimed run may carry a transient `ai` object with
 provider, base URL, model, credential and allowed hosts; the credential is never persisted.
 
 Cross-repository dependencies use `depends_on: alias:TASK-NNN`. Local execution resolves aliases
@@ -104,8 +131,13 @@ value is JSON):
 ```yaml
 sandbox:
   image: ghcr.io/acme/app-ci:latest
-  services: '[{"name":"db","image":"pgvector/pgvector:pg16","env":{"POSTGRES_PASSWORD":"test"},"ready":["pg_isready","-U","postgres"]}]'
+  services: '[{"name":"db","image":"pgvector/pgvector:pg16","env":{"POSTGRES_PASSWORD":"test"},"ready":["pg_isready","-h","localhost","-U","postgres"]}]'
 ```
+
+`ready` runs inside the service container until it exits zero. Probe the service the way the
+agent will reach it — over TCP, `pg_isready -h localhost` — because a probe on the Unix socket
+answers while Postgres is still running `initdb`'s temporary server, and the agent then finds
+`db:5432 - no response`.
 
 The runner creates a private network, starts declared services, mounts only the worktree at
 `/workspace`, and executes external drivers and checks through `docker exec`. CPU, memory, PID,
