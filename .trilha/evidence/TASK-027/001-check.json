@@ -1,0 +1,13 @@
+{
+  "task": "TASK-027",
+  "seq": 1,
+  "kind": "check",
+  "at": "2026-10-26T01:11:48Z",
+  "by": "trilha-spec verify",
+  "command": "go test ./runner ./queue ./cmd/trilha-runner ./driver -run 'TestArtifacts|TestUploadArtifact|TestReportCommandsParseAndRefuse|TestAIDriverReportsFindings|TestClaimAndResult' -count=1",
+  "dir": "/Users/emersonoliveiradossantos/Projetos/github/trilha-runner",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/runner\t1.401s\nok  \tgithub.com/emersonjoe/trilha-runner/queue\t0.884s\nok  \tgithub.com/emersonjoe/trilha-runner/cmd/trilha-runner\t0.605s\nok  \tgithub.com/emersonjoe/trilha-runner/driver\t0.550s\n",
+  "output_sha256": "a833d21a072818070ec4f54a443f86f1a2968a7dd5dd94641d5c1c550e9576d3",
+  "passed": true
+}

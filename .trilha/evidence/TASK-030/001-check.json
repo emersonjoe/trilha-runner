@@ -1,0 +1,13 @@
+{
+  "task": "TASK-030",
+  "seq": 1,
+  "kind": "check",
+  "at": "2026-10-26T01:11:58Z",
+  "by": "trilha-spec verify",
+  "command": "go test ./runner -run TestForeignCodeNeedsDockerGetsNoSecretAndVerifiesFromTheDefaultBranch -count=1",
+  "dir": "/Users/emersonoliveiradossantos/Projetos/github/trilha-runner",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/runner\t1.316s\n",
+  "output_sha256": "f272b7f755a346e95e970c4ce999f8f06b8a27bd5c067f4e49a26f8e8f163fa9",
+  "passed": true
+}
