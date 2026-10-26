@@ -207,15 +207,19 @@ Worst impact: a task runs before what it depends on is done, or waits forever.
 *A worker claims runs, executes them, and reports progress, result and evidence.*
 Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cloud cannot read.
 
-**J5.1 The HTTP contract** — I `TestRemote`, U `TestExecutionV1FixtureMatchesRemoteResult`
+**J5.1 The HTTP contract** — I `TestRemote`, U `TestExecutionV1FixtureMatchesRemoteResult`,
+`TestExecutionV1NeedsInputFixtureDecodes`
 - Resources: httptest.
 - Preconditions: a fake control plane.
-- Data: a claim, a result, a heartbeat; the `execution-v1` fixture.
+- Data: a claim, a result, a heartbeat; the `execution-v1` fixture and its protocol 0.4
+  `needs_input` sibling.
 - Steps: claim, report, heartbeat.
 - Expected: `Authorization: Bearer`; 204 is an empty queue; the result matches the
   `execution-v1` fixture of `trilha-spec` (copied byte for byte, `make conformance`, also a CI
   job), reads back field for field after a round trip, and an attempt keeps its cost under the
-  protocol's names: `provider`, `tokens_in`, `tokens_out`, `cost`, `currency`.
+  protocol's names: `provider`, `tokens_in`, `tokens_out`, `cost`, `currency`. The `needs_input`
+  fixture decodes into the claim (`kind`, `context`) and the result (`question`, `session`,
+  `overview`, `notes`, `diff_stats`, `passed=false`) and survives the round trip.
 
 **J5.2 Capacity** — I `TestWorkerCapacityClaimsThirdOnlyAfterOneFinishes`
 - Resources: httptest.

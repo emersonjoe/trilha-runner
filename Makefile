@@ -45,4 +45,5 @@ build:
 
 conformance:
 	cmp testdata/contracts/execution-v1.json ../trilha-spec/execution/testdata/run-v1.json
+	cmp testdata/contracts/execution-v1-needs-input.json ../trilha-spec/execution/testdata/run-v1-needs-input.json
 	cmp testdata/contracts/execution-v1.schema.json ../trilha-spec/contracts/execution/v1/schema.json

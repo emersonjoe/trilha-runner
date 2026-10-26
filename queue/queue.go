@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/emersonjoe/trilha-runner/internal/taskcompat"
+	"github.com/emersonjoe/trilha-spec/execution"
 	"github.com/emersonjoe/trilha-spec/task"
 )
 
@@ -29,6 +30,15 @@ type Item struct {
 	// Waiting carries an unresolved cross-repository dependency when a
 	// control plane returns the item for observability without claiming it.
 	Waiting string `json:"waiting,omitempty"`
+	// Protocol 0.4, with the names of execution.Run. Kind is what the run is
+	// for ("" or implement today; review and hunt come later and are refused
+	// by nobody here yet). Continuation carries an operator's answer to the
+	// question a needs_input run asked; Context is the task's memory, which
+	// reaches the agent quoted, never as instructions. Fields this runner
+	// does not know yet (review_of, hunt_seed, variant_*) are ignored.
+	Kind         execution.Kind          `json:"kind,omitempty"`
+	Continuation *execution.Continuation `json:"continuation,omitempty"`
+	Context      *execution.TaskContext  `json:"context,omitempty"`
 }
 
 // AI is the project-scoped provider configuration disclosed only with a
@@ -123,6 +133,15 @@ type Result struct {
 	DiffSummary      string          `json:"diff_summary,omitempty"`
 	AgentReport      string          `json:"agent_report,omitempty"`
 	Attempts         []Attempt       `json:"attempts,omitempty"`
+	// Protocol 0.4 (execution.Outcome, same names). Status may be
+	// needs_input: passed is false, and it is not a failure. Question,
+	// overview and notes have been through the runner's secret scan; diff
+	// stats are counts, never content.
+	Question  *execution.Question  `json:"question,omitempty"`
+	Session   *execution.Session   `json:"session,omitempty"`
+	Overview  string               `json:"overview,omitempty"`
+	Notes     []execution.Note     `json:"notes,omitempty"`
+	DiffStats *execution.DiffStats `json:"diff_stats,omitempty"`
 }
 
 func (result Result) MarshalJSON() ([]byte, error) {
@@ -172,6 +191,10 @@ type Progress struct {
 	AttemptStatus string `json:"attempt_status,omitempty"`
 	FailureClass  string `json:"failure_class,omitempty"`
 	ErrorCode     string `json:"error_code,omitempty"`
+	// Protocol 0.4: what the agent is doing (sent only when it changes) and
+	// the badge that says a person is needed.
+	AgentState execution.AgentState `json:"agent_state,omitempty"`
+	Attention  *execution.Attention `json:"attention,omitempty"`
 }
 
 type Attempt struct {

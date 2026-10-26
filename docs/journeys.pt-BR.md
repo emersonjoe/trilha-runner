@@ -211,15 +211,19 @@ Pior impacto: a task roda antes do que depende dela estar pronto, ou espera para
 Pior impacto: execuções travadas no cloud, reivindicação acima da capacidade, ou resultado
 que o cloud não lê.
 
-**J5.1 O contrato HTTP** — I `TestRemote`, U `TestExecutionV1FixtureMatchesRemoteResult`
+**J5.1 O contrato HTTP** — I `TestRemote`, U `TestExecutionV1FixtureMatchesRemoteResult`,
+`TestExecutionV1NeedsInputFixtureDecodes`
 - Recursos: httptest.
 - Pré-condições: um control plane falso.
-- Dados: uma reivindicação, um resultado, um heartbeat; a fixture `execution-v1`.
+- Dados: uma reivindicação, um resultado, um heartbeat; a fixture `execution-v1` e a irmã
+  `needs_input` do protocolo 0.4.
 - Passos: reivindicar, reportar, heartbeat.
 - Esperado: `Authorization: Bearer`; 204 é fila vazia; o resultado bate com a fixture
   `execution-v1` do `trilha-spec` (copiada byte a byte, `make conformance`, também um job de CI),
   volta campo a campo depois de uma ida e volta, e uma tentativa mantém seu custo sob os nomes do
-  protocolo: `provider`, `tokens_in`, `tokens_out`, `cost`, `currency`.
+  protocolo: `provider`, `tokens_in`, `tokens_out`, `cost`, `currency`. A fixture `needs_input`
+  decodifica na reivindicação (`kind`, `context`) e no resultado (`question`, `session`,
+  `overview`, `notes`, `diff_stats`, `passed=false`) e sobrevive à ida e volta.
 
 **J5.2 Capacidade** — I `TestWorkerCapacityClaimsThirdOnlyAfterOneFinishes`
 - Recursos: httptest.
