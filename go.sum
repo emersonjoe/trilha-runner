@@ -1,4 +1,4 @@
 github.com/emersonjoe/trilha v0.123.0 h1:/zOG2gqC9xLMdBO66/3QRqjVSl+KUqiO3Wy0RIO5Oq0=
 github.com/emersonjoe/trilha v0.123.0/go.mod h1:VSXzFFEW7IHvBCNQKfd+Eq/MjqEaX/FmRss/b5jvJDM=
-github.com/emersonjoe/trilha-spec v0.3.2-0.20261025235027-9cb760d9ccf7 h1:KasiFby/6/6Mi8X1QWAaE8ueGch/eRvk69o6Th1oxOY=
-github.com/emersonjoe/trilha-spec v0.3.2-0.20261025235027-9cb760d9ccf7/go.mod h1:r9UIvZ01Y69wfwg6AJ+k3/GOX2C4UTwZONwH7FU1eO4=
+github.com/emersonjoe/trilha-spec v0.4.0 h1:Y5lqMzh0SgrvMC5XHTFVxUZ26JmqVGEmRDPw8nXnFRk=
+github.com/emersonjoe/trilha-spec v0.4.0/go.mod h1:r9UIvZ01Y69wfwg6AJ+k3/GOX2C4UTwZONwH7FU1eO4=

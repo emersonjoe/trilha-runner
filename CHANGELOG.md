@@ -2,9 +2,9 @@
 
 This project follows semantic versioning.
 
-## Unreleased
+## 0.6.0 — 2026-10-25
 
-Protocol 0.4 (trilha-spec spec 016) on the runner side: phase A of the dev-3.0 plan
+Protocol 0.4 (trilha-spec v0.4.0, spec 016) on the runner side: phase A of the dev-3.0 plan
 (`trilha-cloud/docs/PLANO-DEV3.md`, DV-01 to DV-04 and DV-12) and roadmap RM-012/RM-013; phase B
 (DV-05b, DV-06, DV-07, DV-08, DV-13a–c and report artifacts).
 

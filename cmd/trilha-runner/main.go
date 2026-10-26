@@ -27,7 +27,7 @@ import (
 // version is the release this binary is. It is a var so a release build can
 // set it at link time (`-ldflags "-X main.version=0.4.0"`); the source value
 // is what `go install` reports and what the changelog test pins.
-var version = "0.5.0"
+var version = "0.6.0"
 
 var usage = `trilha-runner ` + version + ` — executes tasks of the Trilha protocol
 
