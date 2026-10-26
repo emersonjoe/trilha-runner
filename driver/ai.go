@@ -13,8 +13,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/emersonjoe/trilha-runner/internal/agentlink"
+	"github.com/emersonjoe/trilha-spec/execution"
 	"github.com/emersonjoe/trilha-spec/task"
 	"github.com/emersonjoe/trilha/ai"
 	"github.com/emersonjoe/trilha/ai/mcp"
@@ -74,6 +77,18 @@ func (d AI) Execute(ctx context.Context, job Job) (Output, error) {
 			}
 		}
 	}
+	// The agent's state comes from the loop itself: a tool call starts and
+	// ends, the loop stops. A question, a note and an overview are tools too.
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	defer stopLoop()
+	var asked atomic.Bool
+	var afterAsk atomic.Int32
+	if job.Signal != nil {
+		tools = append(tools, askTool(job, &asked), memoryTool(job, "note", agentlink.TypeNote, "Leave a note the next run of this task should know (one fact, a sentence or two)."), memoryTool(job, "overview", agentlink.TypeOverview, "Set the task's overview: one or two sentences on what is being done and where it stands."))
+		for _, tool := range tools {
+			tool.Func = signalled(job, tool.Name, tool.Func, &asked, &afterAsk, stopLoop)
+		}
+	}
 	maxTurns := d.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = 40
@@ -90,7 +105,13 @@ func (d AI) Execute(ctx context.Context, job Job) (Output, error) {
 	if strings.TrimSpace(job.Checkpoint) != "" {
 		prompt += "\n\n## Recovery checkpoint\n\nContinue from the previous interrupted attempt. Reuse the work already present in the worktree and do not restart discovery.\n\n```json\n" + job.Checkpoint + "\n```\n"
 	}
-	res, err := ai.Run(ctx, cli, agent, prompt)
+	res, err := ai.Run(loopCtx, cli, agent, prompt)
+	job.signal(agentlink.Message{Type: agentlink.TypeEvent, Event: execution.EventStop})
+	if err != nil && asked.Load() {
+		// The agent asked and was told to stop; whatever ended the loop after
+		// that (a refused tool, the cancel) is the stop, not a failure.
+		err = nil
+	}
 	o := Output{Meta: map[string]string{"driver": "ai", "model": firstNonEmpty(model, cli.Model), "elapsed": time.Since(start).Round(time.Millisecond).String()}}
 	if res != nil {
 		secret := ""
@@ -116,6 +137,52 @@ func (d AI) Execute(ctx context.Context, job Job) (Output, error) {
 		return o, fmt.Errorf("ai: %s", redactSecrets(err.Error(), secret))
 	}
 	return o, nil
+}
+
+// askTool records the question for a person and tells the model to stop.
+func askTool(job Job, asked *atomic.Bool) *ai.Tool {
+	return ai.NewTool("ask", "Ask the person who owns this task ONE objective question when information you need is missing and cannot be found in the worktree or in the prompt (an answer you already received is in the prompt: never ask it again). After asking, stop: call no more tools and end your turn.",
+		ai.Schema(`{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}`),
+		ai.Typed(func(ctx context.Context, in struct{ Question string }) (string, error) {
+			if strings.TrimSpace(in.Question) == "" {
+				return "", fmt.Errorf("ask: the question is empty")
+			}
+			job.signal(agentlink.Message{Type: agentlink.TypeAsk, Text: in.Question})
+			asked.Store(true)
+			return "Your question was recorded and will reach a person; the answer comes in a new session. Stop now: call no more tools and end your turn with one line saying what you did so far.", nil
+		}))
+}
+
+func memoryTool(job Job, name, kind, description string) *ai.Tool {
+	return ai.NewTool(name, description,
+		ai.Schema(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`),
+		ai.Typed(func(ctx context.Context, in struct{ Text string }) (string, error) {
+			if strings.TrimSpace(in.Text) == "" {
+				return "", fmt.Errorf("%s: the text is empty", name)
+			}
+			job.signal(agentlink.Message{Type: kind, Text: in.Text})
+			return name + " recorded", nil
+		}))
+}
+
+// signalled reports a tool's start and end, and refuses work after the
+// agent asked a question: the third refused call ends the loop.
+func signalled(job Job, name string, fn ai.ToolFunc, asked *atomic.Bool, afterAsk *atomic.Int32, stop func()) ai.ToolFunc {
+	return func(ctx context.Context, args json.RawMessage) (string, error) {
+		if name == "ask" {
+			// Asking is its own state; a tool end after it would read as working.
+			return fn(ctx, args)
+		}
+		if asked.Load() {
+			if afterAsk.Add(1) >= 3 {
+				stop()
+			}
+			return "", fmt.Errorf("you already asked a question: stop now and end your turn")
+		}
+		job.signal(agentlink.Message{Type: agentlink.TypeEvent, Event: execution.EventToolStart})
+		defer job.signal(agentlink.Message{Type: agentlink.TypeEvent, Event: execution.EventToolEnd})
+		return fn(ctx, args)
+	}
 }
 
 func validateAllowedHost(baseURL string, allowed []string) error {

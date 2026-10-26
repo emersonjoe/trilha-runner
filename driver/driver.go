@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/emersonjoe/trilha-runner/internal/agentlink"
 	"github.com/emersonjoe/trilha-spec/agent"
 	"github.com/emersonjoe/trilha-spec/task"
 )
@@ -46,6 +47,26 @@ type Job struct {
 	// Prefix runs an exec driver or verification command inside a prepared
 	// sandbox, for example: docker exec -i -w /workspace CONTAINER.
 	Prefix []string
+	// Signal receives what an in-process agent (the ai driver) reports: tool
+	// starts and ends, a stop, a question, a note, an overview. A command-line
+	// agent reports the same through TRILHA_RUN_SOCKET. Nil: nobody listens.
+	Signal func(agentlink.Message)
+	// RunDir is the run's private directory, outside the worktree, where a
+	// driver may put its own configuration (claude-code's settings file).
+	RunDir string
+	// Self is the trilha-runner binary, which agent hooks call back into.
+	// Empty: no hooks.
+	Self string
+	// Resume is the agent session to continue (claude-code's --resume), when
+	// the run answers a question that session asked.
+	Resume string
+}
+
+// signal reports to the job's listener, if any.
+func (job Job) signal(message agentlink.Message) {
+	if job.Signal != nil {
+		job.Signal(message)
+	}
 }
 
 // AIConfig is deliberately transient. The runner must not persist Credential.

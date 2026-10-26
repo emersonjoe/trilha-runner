@@ -15,6 +15,7 @@ import (
 	"github.com/emersonjoe/trilha-runner/queue"
 	"github.com/emersonjoe/trilha-runner/runner"
 	"github.com/emersonjoe/trilha-runner/syncer"
+	"github.com/emersonjoe/trilha-spec/execution"
 )
 
 type stringList []string
@@ -244,6 +245,10 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 	}
 	active := *base
 	root := base.Layout.Root
+	withItem := func(r *runner.Runner) {
+		r.RunID, r.Continuation, r.TaskContext = item.ID, item.Continuation, item.Context
+	}
+	withItem(&active)
 	active.AI = itemAI(item.AI)
 	active.Progress = progressReporter(ctx, remote, item)
 	applyDriverPreset(&active, item.AI)
@@ -289,6 +294,7 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 						created.AI = itemAI(item.AI)
 						created.Progress = progressReporter(ctx, remote, item)
 						applyDriverPreset(created, item.AI)
+						withItem(created)
 						active = *created
 						root = created.Layout.Root
 					}
@@ -325,6 +331,8 @@ func progressReporter(ctx context.Context, remote queue.Remote, item queue.Item)
 			AttemptStatus: e.AttemptStatus,
 			FailureClass:  e.FailureClass,
 			ErrorCode:     e.ErrorCode,
+			AgentState:    e.AgentState,
+			Attention:     e.Attention,
 		})
 	}
 }
@@ -372,7 +380,12 @@ func resultReport(result *runner.Result, runErr error) queue.Result {
 		for _, attempt := range result.Attempts {
 			attempts = append(attempts, queue.Attempt{Number: attempt.Number, Status: attempt.Status, FailureClass: attempt.FailureClass, ErrorCode: attempt.ErrorCode, RepairReason: attempt.RepairReason, Model: attempt.Model, TotalTokens: attempt.TotalTokens, EstimatedCost: attempt.EstimatedCost, Provider: attempt.Provider, TokensIn: attempt.TokensIn, TokensOut: attempt.TokensOut, Cost: attempt.Cost, Currency: attempt.Currency, Started: attempt.Started, Finished: attempt.Finished})
 		}
-		report = queue.Result{ProtocolVersion: result.ProtocolVersion, Passed: result.Passed, Status: string(result.Status), Branch: result.Branch, Commit: result.Commit, Evidence: result.Evidence, Log: result.Output, Attempt: result.Attempt, FailureClass: result.FailureClass, ErrorCode: result.ErrorCode, Model: result.Model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens, EstimatedCost: result.EstimatedCost, DurationMS: result.Elapsed.Milliseconds(), FilesChanged: result.FilesChanged, DiffSummary: result.DiffSummary, AgentReport: result.AgentReport, Attempts: attempts}
+		report = queue.Result{ProtocolVersion: result.ProtocolVersion, Passed: result.Passed, Status: string(result.Status), Branch: result.Branch, Commit: result.Commit, Evidence: result.Evidence, Log: result.Output, Attempt: result.Attempt, FailureClass: result.FailureClass, ErrorCode: result.ErrorCode, Model: result.Model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens, EstimatedCost: result.EstimatedCost, DurationMS: result.Elapsed.Milliseconds(), FilesChanged: result.FilesChanged, DiffSummary: result.DiffSummary, AgentReport: result.AgentReport, Attempts: attempts,
+			Question: result.Question, Session: result.Session, Overview: result.Overview, Notes: result.Notes, DiffStats: result.DiffStats}
+		if result.NeedsInput() {
+			// Not a failure: the agent stopped to ask (protocol 0.4).
+			report.Status, report.Passed = string(execution.NeedsInput), false
+		}
 	}
 	if runErr != nil {
 		report.Error = runErr.Error()

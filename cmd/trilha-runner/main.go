@@ -44,6 +44,14 @@ usage: trilha-runner <command> [flags]
   drivers                the drivers available
   version
 
+During a run, for the agent (always exit 0; they talk to the runner over TRILHA_RUN_SOCKET):
+  ask "<question>"       stop for a person: the run ends needs_input with the question
+  note "<text>"          a note the next run of the task will read, quoted
+  overview "<text>"      one or two sentences on what is being done and where it stands
+  attention "<reason>" | --clear
+                         raise or clear the badge that says a person is needed
+  hook claude            what Claude Code's hooks call: the hook JSON on stdin
+
 The driver comes from the task's agent manifest (.trilha/agents/<name>.md) unless --driver
 is given. exec needs a command (manifest or --cmd); ai reads OPENAI_BASE_URL, OPENAI_API_KEY
 and TRILHA_AI_MODEL for local runs, while workers prefer per-project credentials from Cloud.
@@ -56,6 +64,12 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	switch os.Args[1] {
+	case "hook", "ask", "note", "overview", "attention":
+		cmdAgent(ctx, os.Args[1], os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
+		return
+	}
+	selfPath = resolveSelf()
 	if err := run(ctx, os.Args[1], os.Args[2:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -124,6 +138,7 @@ func newRunnerAt(path, drv, command string, out io.Writer) (*runner.Runner, erro
 		}
 	}
 	r.Command = command
+	r.Self = selfPath
 	r.Log = func(s string) { fmt.Fprintln(os.Stderr, "·", s) }
 	return r, nil
 }
@@ -175,7 +190,14 @@ func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error
 }
 
 func printResult(out io.Writer, res *runner.Result) {
-	fmt.Fprintf(out, "%s → %s (driver %s, %s)\n", res.Task, res.Status, res.Driver, res.Elapsed.Round(time.Millisecond))
+	status := string(res.Status)
+	if res.NeedsInput() {
+		status = "needs input"
+	}
+	fmt.Fprintf(out, "%s → %s (driver %s, %s)\n", res.Task, status, res.Driver, res.Elapsed.Round(time.Millisecond))
+	if res.NeedsInput() {
+		fmt.Fprintf(out, "question: %s\n", res.Question.Text)
+	}
 	if res.Branch != "" {
 		fmt.Fprintf(out, "branch %s in %s\n", res.Branch, res.Worktree)
 	}

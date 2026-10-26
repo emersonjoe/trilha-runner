@@ -137,7 +137,7 @@ func TestClaudeCodeOAuthProviderSelectsTokenAndDropsBadModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output.Text, "--dangerously") || !strings.Contains(output.Text, "args:-p - --permission-mode acceptEdits\n") {
+	if strings.Contains(output.Text, "--dangerously") || !strings.Contains(output.Text, "args:-p - --permission-mode acceptEdits --session-id ") {
 		t.Fatalf("a model that is not a model reached argv: %q", output.Text)
 	}
 	if !strings.Contains(output.Text, "oauth:[REDACTED] key:\n") {

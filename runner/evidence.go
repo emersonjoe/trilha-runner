@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/emersonjoe/trilha-runner/driver"
+	"github.com/emersonjoe/trilha-spec/execution"
 	"github.com/emersonjoe/trilha-spec/task"
 )
 
@@ -16,6 +17,9 @@ func (l *attemptLoop) captureOutput(logPath string, output driver.Output) error 
 	l.result.Output = output.Text
 	l.result.AgentReport = output.Text
 	l.result.Model = output.Meta["model"]
+	if id := output.Meta["session_id"]; driver.ValidSessionID(id) {
+		l.result.Session = &execution.Session{Driver: l.driver.Name(), SessionID: id}
+	}
 	l.result.InputTokens += fieldInt(output.Meta["input_tokens"], 0)
 	l.result.OutputTokens += fieldInt(output.Meta["output_tokens"], 0)
 	tokens := fieldInt(output.Meta["tokens"], 0)

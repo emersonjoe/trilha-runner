@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/emersonjoe/trilha-runner/sandbox"
 	"github.com/emersonjoe/trilha-runner/worktree"
 	"github.com/emersonjoe/trilha-spec/agent"
+	"github.com/emersonjoe/trilha-spec/execution"
 	"github.com/emersonjoe/trilha-spec/spec"
 	"github.com/emersonjoe/trilha-spec/task"
 )
@@ -49,6 +51,21 @@ type Runner struct {
 	MaxAttempts int
 	// RetryBase is the first exponential-backoff delay. Default: 1 second.
 	RetryBase time.Duration
+	// Self is the trilha-runner binary. When set, the agent finds it on its
+	// PATH (ask, note, overview, attention) and claude-code's hooks call it.
+	Self string
+	// RunID is the control plane's id for this run, exported to the agent as
+	// TRILHA_RUN_ID; the task id when empty.
+	RunID string
+	// Continuation is an operator's answer to the question an earlier run
+	// asked: the same claude-code session resumes with it, or a fresh session
+	// reads it, quoted, in the context pack.
+	Continuation *execution.Continuation
+	// TaskContext is the task's memory (overview, recent notes), quoted into
+	// the context pack.
+	TaskContext *execution.TaskContext
+	// AgentStateInterval bounds agent-state reports. Default: 2 seconds.
+	AgentStateInterval time.Duration
 }
 
 // Event is a structured progress notification about a run's phase, emitted
@@ -65,6 +82,10 @@ type Event struct {
 	AttemptStatus string
 	FailureClass  string
 	ErrorCode     string
+	// AgentState, when set, is what the agent is doing now; Attention raises
+	// or clears the badge that says a person is needed.
+	AgentState execution.AgentState
+	Attention  *execution.Attention
 }
 
 // Attempt is one provider or corrective execution inside a logical run.
@@ -115,7 +136,17 @@ type Result struct {
 	FilesChanged []string `json:"files_changed,omitempty"`
 	DiffSummary  string   `json:"diff_summary,omitempty"`
 	AgentReport  string   `json:"agent_report,omitempty"`
+	// Question is set when the agent stopped to ask: the run needs input, the
+	// task is blocked locally, and nothing failed.
+	Question  *execution.Question  `json:"question,omitempty"`
+	Session   *execution.Session   `json:"session,omitempty"`
+	Overview  string               `json:"overview,omitempty"`
+	Notes     []execution.Note     `json:"notes,omitempty"`
+	DiffStats *execution.DiffStats `json:"diff_stats,omitempty"`
 }
+
+// NeedsInput answers whether the run ended with a question for a person.
+func (r *Result) NeedsInput() bool { return r != nil && r.Question != nil }
 
 // New opens the layout above dir.
 func New(dir string) (*Runner, error) {
@@ -151,6 +182,12 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 		return nil, err
 	}
 	r.resumeOrphan(t)
+	if t.Status == task.Blocked && r.Continuation != nil {
+		// The task stopped here to ask; the answer has come.
+		if err := taskcompat.Move(r.Store, t, task.Ready); err == nil {
+			t.Status = task.Ready
+		}
+	}
 	if t.Status != task.Ready {
 		return nil, fmt.Errorf("task %s is %s, not ready", id, t.Status)
 	}
@@ -232,6 +269,22 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	}
 	defer release()
 
+	runDir := filepath.Join(r.Layout.Runs(), id)
+	session, closeLink := r.openAgentLink(id, runDir, &env.Env, len(env.Prefix) == 0)
+	prompt := pack.Markdown()
+	// The same claude-code conversation resumes with the answer alone; any
+	// other session — another driver, a corrective attempt, a resume that
+	// fails — starts fresh with the question and answer quoted in the pack.
+	resume := ""
+	if c := r.Continuation; c != nil && c.Session != nil && c.Session.Driver == drv.Name() && drv.Name() == "claude-code" && driver.ValidSessionID(c.Session.SessionID) {
+		resume = c.Session.SessionID
+	}
+	fresh := prompt + agentSections(r.TaskContext, r.Continuation)
+	self := ""
+	if len(env.Prefix) == 0 {
+		self = r.Self
+	}
+
 	maxAttempts := r.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = fieldInt(t.Fields.Get("max_attempts"), 0)
@@ -244,10 +297,21 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	}
 	loop := attemptLoop{
 		runner: r, ctx: ctx, item: t, manifest: man, driver: drv, manager: wm, tree: wt,
-		dir: env.Dir, env: env.Env, prefix: env.Prefix, prompt: pack.Markdown(), checks: append(append([]string(nil), t.Checks...), proj.Verify...), ai: r.AI,
+		dir: env.Dir, env: env.Env, prefix: env.Prefix, prompt: fresh, checks: append(append([]string(nil), t.Checks...), proj.Verify...), ai: r.AI,
 		maxAttempts: maxAttempts, result: res, started: start, fail: fail,
+		agent: session, runDir: runDir, self: self, resume: resume, resumePrompt: resumePrompt(r.Continuation, resume),
 	}
-	return loop.run()
+	result, runErr := loop.run()
+	closeLink()
+	r.finishAgent(ctx, result, session, wm, wt, drv.Name())
+	return result, runErr
+}
+
+func resumePrompt(continuation *execution.Continuation, resume string) string {
+	if resume == "" || continuation == nil {
+		return ""
+	}
+	return continuationPrompt(continuation)
 }
 
 func (r *Runner) moveRunning(item *task.Task) error {
