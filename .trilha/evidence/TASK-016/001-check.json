@@ -1,0 +1,13 @@
+{
+  "task": "TASK-016",
+  "seq": 1,
+  "kind": "check",
+  "at": "2026-10-26T00:31:29Z",
+  "by": "trilha-spec verify",
+  "command": "go test ./cmd/trilha-runner -run TestWorkerHeartbeatsWhileARunIsActive -count=1",
+  "dir": "/Users/emersonoliveiradossantos/Projetos/github/trilha-runner",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/cmd/trilha-runner\t0.695s\n",
+  "output_sha256": "e05b240fca85fa3e7f47b4b750bfefac98106256c88f46e65f417aa28447aa2a",
+  "passed": true
+}

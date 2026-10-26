@@ -1,0 +1,13 @@
+{
+  "task": "TASK-017",
+  "seq": 1,
+  "kind": "check",
+  "at": "2026-10-26T00:31:42Z",
+  "by": "trilha-spec verify",
+  "command": "go test ./cmd/trilha-runner ./runner -run TestWorkerResultSurvivesTwoFailedDeliveries|TestWorkerResendsPendingResultsAtStart|TestRunResumesATaskLeftRunningWithNoLiveProcess -count=1",
+  "dir": "/Users/emersonoliveiradossantos/Projetos/github/trilha-runner",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/cmd/trilha-runner\t0.934s\nok  \tgithub.com/emersonjoe/trilha-runner/runner\t0.505s\n",
+  "output_sha256": "19ee94dba985f2b586306cf7db039c2e56c8ee9ad40f7d6a7b80aeaab5a9d65f",
+  "passed": true
+}

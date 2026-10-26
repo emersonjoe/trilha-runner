@@ -1,0 +1,13 @@
+{
+  "task": "TASK-021",
+  "seq": 1,
+  "kind": "check",
+  "at": "2026-10-26T00:31:57Z",
+  "by": "trilha-spec verify",
+  "command": "go test ./runner -run TestTaskMemoryAndAnswerAreQuotedIntoTheContextPack|TestAgentQuestionEndsTheRunNeedingInput -count=1",
+  "dir": "/Users/emersonoliveiradossantos/Projetos/github/trilha-runner",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/runner\t0.448s\n",
+  "output_sha256": "14d3eae0e0a0cf07715395180292aeb753f9ed4a37b518b079efa409b6dfa9b2",
+  "passed": true
+}

@@ -1,0 +1,13 @@
+{
+  "task": "TASK-022",
+  "seq": 3,
+  "kind": "check",
+  "at": "2026-10-26T00:31:59Z",
+  "by": "trilha-spec verify",
+  "command": "go test ./...",
+  "dir": "/Users/emersonoliveiradossantos/Projetos/github/trilha-runner",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/cmd/trilha-runner\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/deployer\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/driver\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/internal/agentlink\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/internal/catalog\t0.222s\nok  \tgithub.com/emersonjoe/trilha-runner/internal/redact\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/internal/taskcompat\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/internal/testreport\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/queue\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/runner\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/sandbox\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/syncer\t(cached)\nok  \tgithub.com/emersonjoe/trilha-runner/worktree\t(cached)\n",
+  "output_sha256": "1b7a865396f2b81eb8eb8c605b9e4e530d86ae4113e2f7859005c6d788884a49",
+  "passed": true
+}
