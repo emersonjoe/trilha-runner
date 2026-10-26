@@ -197,7 +197,7 @@ func (l *attemptLoop) run() (*Result, error) {
 
 func attemptFromOutput(number int, status, failureClass string, started time.Time, output driver.Output) Attempt {
 	tokens := fieldInt(output.Meta["tokens"], 0)
-	attempt := Attempt{Number: number, Status: status, FailureClass: failureClass, Model: output.Meta["model"], TotalTokens: tokens, EstimatedCost: estimateCost(tokens), Started: started, Finished: time.Now()}
+	attempt := Attempt{Number: number, Status: status, FailureClass: failureClass, Model: output.Meta["model"], TotalTokens: tokens, EstimatedCost: outputCost(output, tokens), Started: started, Finished: time.Now()}
 	// The cost under the protocol's names (§10), as far as the driver told us.
 	attempt.Provider = output.Meta["provider"]
 	attempt.TokensIn = fieldInt(output.Meta["input_tokens"], 0)

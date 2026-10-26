@@ -131,3 +131,31 @@ func (driverFunc) Name() string { return "scripted" }
 func (f driverFunc) Execute(ctx context.Context, job driver.Job) (driver.Output, error) {
 	return f(ctx, job)
 }
+
+// A driver that knows what the run cost (Claude Code's total_cost_usd) is
+// believed over the per-token estimate, in the attempt and in the result.
+func TestTheCostTheAgentReportsWinsOverTheEstimate(t *testing.T) {
+	t.Setenv("TRILHA_AI_COST_PER_MILLION_TOKENS", "1")
+	output := driver.Output{Meta: map[string]string{"model": "claude-haiku-4-5-20251001", "provider": "anthropic", "tokens": "26362", "input_tokens": "26322", "output_tokens": "40", "cost_usd": "0.03309375"}}
+	attempt := attemptFromOutput(1, "passed", "", time.Now(), output)
+	if attempt.Cost != 0.03309375 || attempt.Currency != "USD" || attempt.EstimatedCost != 0.03309375 {
+		t.Fatalf("attempt cost = %v %q (estimated %v), want the reported 0.03309375 USD", attempt.Cost, attempt.Currency, attempt.EstimatedCost)
+	}
+	if attempt.Model != "claude-haiku-4-5-20251001" || attempt.Provider != "anthropic" || attempt.TokensIn != 26322 || attempt.TokensOut != 40 || attempt.TotalTokens != 26362 {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+	loop := &attemptLoop{driver: driver.Echo{}, result: &Result{}}
+	for range 2 {
+		if err := loop.captureOutput(filepath.Join(t.TempDir(), "agent.log"), output); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := loop.result.EstimatedCost; got < 0.0661874 || got > 0.0661876 {
+		t.Fatalf("two attempts cost %v, want the sum of the reported costs", got)
+	}
+	// Without a reported cost the estimate still applies.
+	estimated := attemptFromOutput(1, "passed", "", time.Now(), driver.Output{Meta: map[string]string{"tokens": "1000000"}})
+	if estimated.Cost != 1 || estimated.EstimatedCost != 1 {
+		t.Fatalf("estimate = %+v", estimated)
+	}
+}

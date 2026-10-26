@@ -137,7 +137,7 @@ func TestClaudeCodeOAuthProviderSelectsTokenAndDropsBadModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output.Text, "--dangerously") || !strings.Contains(output.Text, "args:-p - --permission-mode acceptEdits --session-id ") {
+	if strings.Contains(output.Text, "--dangerously") || !strings.Contains(output.Text, "args:-p - --permission-mode acceptEdits --output-format json --session-id ") {
 		t.Fatalf("a model that is not a model reached argv: %q", output.Text)
 	}
 	if !strings.Contains(output.Text, "oauth:[REDACTED] key:\n") {
@@ -145,5 +145,57 @@ func TestClaudeCodeOAuthProviderSelectsTokenAndDropsBadModel(t *testing.T) {
 	}
 	if !IsClaudeCode("claude-code-oauth") || !IsClaudeCode("claude-code") || IsClaudeCode("anthropic") {
 		t.Fatal("IsClaudeCode")
+	}
+}
+
+// Claude Code reports what a run used in its JSON result: the model it
+// resolved, the tokens (cache writes and reads are input too) and the cost
+// in dollars. Before, the preset asked for plain text and every claude-code
+// run reached the control plane with no model, tokens or cost.
+func TestClaudeCodeReportsModelTokensAndCostFromItsJSONResult(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	root := t.TempDir()
+	result := `{"type":"result","subtype":"success","is_error":false,"result":"Wrote GREETING.txt with top-secret","num_turns":3,"total_cost_usd":0.03309375,"usage":{"input_tokens":10,"output_tokens":40,"cache_creation_input_tokens":26307,"cache_read_input_tokens":5},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":10,"outputTokens":40,"costUSD":0.03309375}}}`
+	script := "#!/bin/sh\ncat >/dev/null\necho \"args:$*\" >&2\necho 'a warning on stderr' >&2\nprintf '%s\\n' '" + result + "'\n"
+	if err := os.WriteFile(filepath.Join(root, "claude"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	j := job(t)
+	j.AI = &AIConfig{Provider: "claude-code", Credential: "top-secret", Model: "haiku"}
+	output, err := (ClaudeCode{}).Execute(context.Background(), j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Text != "Wrote GREETING.txt with [REDACTED]" {
+		t.Fatalf("the agent's final message is the JSON result's text, redacted: %q", output.Text)
+	}
+	want := map[string]string{"model": "claude-haiku-4-5-20251001", "provider": "anthropic", "input_tokens": "26322", "output_tokens": "40", "tokens": "26362", "cost_usd": "0.03309375", "turns": "3"}
+	for key, value := range want {
+		if output.Meta[key] != value {
+			t.Errorf("Meta[%q] = %q, want %q", key, output.Meta[key], value)
+		}
+	}
+}
+
+// An older Claude Code that ignores --output-format still works: its text is
+// the report, and nothing is invented about what it used.
+func TestClaudeCodeWithoutAJSONResultKeepsTheText(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "claude"), []byte("#!/bin/sh\ncat >/dev/null\necho 'plain answer'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := (ClaudeCode{}).Execute(context.Background(), job(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(output.Text) != "plain answer" || output.Meta["cost_usd"] != "" || output.Meta["model"] != "" {
+		t.Fatalf("text = %q, meta = %v", output.Text, output.Meta)
 	}
 }

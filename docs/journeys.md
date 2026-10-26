@@ -517,6 +517,21 @@ Worst impact: an agent that writes or runs outside its worktree.
 - Steps: `trilha-runner drivers`.
 - Expected: `ai`, `claude-code`, `echo`, `exec`, one per line.
 
+**J10.3 `claude-code` reports the model, tokens and cost it used** — U `TestClaudeCodeReportsModelTokensAndCostFromItsJSONResult`,
+`TestClaudeCodeWithoutAJSONResultKeepsTheText`, `TestTheCostTheAgentReportsWinsOverTheEstimate`
+- Resources: sh (a fake `claude` on `PATH`).
+- Preconditions: a claim with the `claude-code` provider and a made-up credential.
+- Data: a JSON result line after a stderr warning — final message holding the credential, 10
+  input, 26,307 cache-write, 5 cache-read and 40 output tokens, `total_cost_usd` 0.03309375,
+  model `claude-haiku-4-5-20251001`; then a `claude` that prints plain text only;
+  `TRILHA_AI_COST_PER_MILLION_TOKENS=1`.
+- Steps: execute the preset driver; build the attempt and the result from its output twice.
+- Expected: argv asks for `--output-format json`; the report is the final message, redacted;
+  model, provider `anthropic`, input 26,322 (cache counted as input), output 40, total 26,362,
+  three turns and cost 0.03309375 USD are reported; the reported cost wins over the per-token
+  estimate in the attempt and adds up across attempts; plain text is kept as the report and
+  no model or cost is invented; without a reported cost the estimate still applies.
+
 ## J11 — Release · low
 
 **J11.1 The binary reports the version that shipped** — U `TestVersionMatchesTheNewestChangelogEntry`
