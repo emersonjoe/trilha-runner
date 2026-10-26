@@ -47,7 +47,8 @@ where() {
   esac
 }
 
-file_mode() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+# GNU stat first: on Linux `stat -f` means "file system" and prints before failing.
+file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
 load() {
   case $(backend) in
