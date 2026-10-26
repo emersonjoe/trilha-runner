@@ -5,9 +5,36 @@ This project follows semantic versioning.
 ## Unreleased
 
 Protocol 0.4 (trilha-spec spec 016) on the runner side: phase A of the dev-3.0 plan
-(`trilha-cloud/docs/PLANO-DEV3.md`, DV-01 to DV-04 and DV-12) and roadmap RM-012/RM-013.
+(`trilha-cloud/docs/PLANO-DEV3.md`, DV-01 to DV-04 and DV-12) and roadmap RM-012/RM-013; phase B
+(DV-05b, DV-06, DV-07, DV-08, DV-13a–c and report artifacts).
 
 ### Added
+
+- **Review runs** (`kind: review`, DV-06). `review_mode: report` (the default) reviews the task's
+  branch read-only in a detached checkout of its own; `fix` works on the branch, commits and runs
+  the task's checks. The prompt points at the merge base with the default branch; the result
+  carries `review {verdict, findings}` (verdict `changes` when there are findings and the agent
+  gave none, `pass` otherwise).
+- **Bug hunts** (`kind: hunt`, DV-07): read-only, pointed at `hunt_seed`'s area and style, scoped
+  to the files the branch changed since its merge base; the result carries `findings[]` stamped
+  with the area and the style.
+- **Variants** (`variant_index`, DV-05b) work on `trilha/task-nnn-v<N>` in `.trilha/runs/TASK-NNN-vN/`,
+  prove the branch they created in `created-branch`, never adopt one they cannot prove
+  (`-vN-2`, `-vN-3`…), and read nothing a sibling left in the context pack.
+- **Review comments** (`review_comments[]`, DV-08) become a `<reviews>` block built on the runner
+  from the worktree's lines, XML-escaped and quoted as data; the result carries `review_replies[]`.
+- Agent commands `trilha-runner finding`, `verdict`, `reply` and `artifact`, and the same tools in
+  the `ai` driver. A read-only `ai` run gets neither `write_file` nor `ask`.
+- **Artifacts**: `trilha-runner artifact <file>` publishes `.html`, `.md`, `.png` or `.jpg` reports
+  (≤ 2 MiB, ≤ 5 per run), copied to `.trilha/runs/<run>/artifacts/`; the worker uploads them with
+  `PUT /api/runs/{id}/artifacts/{name}` before the result and lists only the accepted ones; 403
+  `ARTIFACTS_DISABLED` drops them all.
+- **`trilha-runner doctor --worktrees`** (DV-13a) classifies `.trilha/runs/*` as live,
+  finished-kept, orphaned or metadata-only, with age buckets and sizes; deletes only with
+  `--prune-orphans` or `--prune-older-than`, never unmerged or uncommitted work without
+  `--force-unmerged`, a branch only when `created-branch` proves the runner made it; **exit code
+  12** when something was skipped or failed.
+- Opt-in live hunt against Ollama on a planted off-by-one.
 
 - **The agent can ask.** `trilha-runner ask "<question>"`, on the agent's PATH during a run,
   ends the run `needs_input` with the question when the agent ends its turn: the work so far is
@@ -48,6 +75,11 @@ Protocol 0.4 (trilha-spec spec 016) on the runner side: phase A of the dev-3.0 p
   `.trilha/runs/TASK-NNN/runner.pid`) goes back to `ready` with a note instead of blocking forever
   (RM-012).
 - A failed `POST /result` no longer stops the worker (see the outbox above).
+- `worktree clean` first stops the processes whose current directory is inside the worktree —
+  SIGTERM, 1.5 s, SIGKILL; `/proc` on Linux, `lsof` on macOS — then removes it (DV-13b). It also
+  accepts a run directory (`TASK-001-v2`).
+- The runner records `created-branch` when it cuts a task's branch, and `checkpoint.json` and
+  `agent.log` live in the run's own directory (`.trilha/runs/<task or run key>/`).
 
 ### Fixed
 
@@ -62,6 +94,17 @@ Protocol 0.4 (trilha-spec spec 016) on the runner side: phase A of the dev-3.0 p
   becomes a fixed notice and its words stay in `question.txt` (mode 0600). The agent socket is
   owner-only; a session id reaches argv only as a UUID; the claude-code settings allow exactly the
   agent's own runner commands through Bash.
+- A read-only run is verified, not trusted: a dirty worktree, a moved `HEAD` or a moved branch
+  fails it with `failure_class: policy` and discards its findings and artifacts; Docker mounts the
+  worktree read-only for it. Findings and replies are validated and secret-redacted; a text
+  artifact holding a secret is refused, an image must start with its format's bytes, and a
+  published file must come from the worktree or `$TRILHA_ARTIFACT_DIR`. Review comment bodies,
+  authors and paths are XML-escaped, quoted as data, and read only inside the worktree (symbolic
+  links included).
+- **Foreign code** (`foreign_code: true`, DV-13c) runs only in the Docker sandbox (policy failure
+  otherwise), gets no secret beyond the AI credential a command-line driver needs (none in the
+  `ai` driver's environment; its checks run in the sandbox), reads `project.verify` from the
+  default branch, and is never pushed.
 
 ## 0.5.0 — 2026-10-25
 
