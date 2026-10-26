@@ -289,6 +289,14 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
   `unknown` and the lookup returns well before 3 s; `echo`, `ai` and `exec` carry the runner's
   own version; with nothing on PATH every agent is `unknown` and the runner still knows itself.
 
+**J5.10 The worker says it is alive during a long run** — I `TestWorkerHeartbeatsWhileARunIsActive`
+- Resources: httptest; a ticker the test drives.
+- Preconditions: a worker with capacity 1; a control plane with one run whose execution blocks.
+- Data: three ticks of the 30 s heartbeat clock, standing for a 100 s run.
+- Steps: start the worker; tick three times while the run is active; let it finish.
+- Expected: the clock asks for 30 s; at least three `running 1/1` heartbeats beyond the claim's;
+  the last heartbeat, after the result, is `idle` (RM-013).
+
 ## J6 — Work created in the UI (bundles) · high
 
 *The worker downloads a bundle, writes its spec and tasks under `.trilha/` and publishes the branch.*

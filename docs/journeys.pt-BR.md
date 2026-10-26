@@ -292,6 +292,14 @@ que o cloud não lê.
   `unknown` e a busca volta bem antes de 3 s; `echo`, `ai` e `exec` levam a versão do próprio
   runner; sem nada no PATH todo agente é `unknown` e o runner ainda sabe quem é.
 
+**J5.10 O worker diz que está vivo durante uma run longa** — I `TestWorkerHeartbeatsWhileARunIsActive`
+- Recursos: httptest; um ticker que o teste controla.
+- Pré-condições: um worker com capacidade 1; um control plane com uma run cuja execução bloqueia.
+- Dados: três ticks do relógio de heartbeat de 30 s, representando uma run de 100 s.
+- Passos: iniciar o worker; dar três ticks com a run ativa; deixá-la terminar.
+- Esperado: o relógio pede 30 s; ao menos três heartbeats `running 1/1` além do da reivindicação;
+  o último heartbeat, depois do resultado, é `idle` (RM-013).
+
 ## J6 — Trabalho criado na UI (bundles) · alta
 
 *O worker baixa um bundle, escreve spec e tasks em `.trilha/` e publica o branch.*

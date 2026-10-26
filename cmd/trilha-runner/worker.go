@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/emersonjoe/trilha-runner/deployer"
@@ -36,6 +37,42 @@ type workerOptions struct {
 	Push          bool
 	Name          string
 	Capacity      int
+
+	// heartbeatTicker and execute are seams for tests: the clock that paces
+	// heartbeats during a run, and the execution of one claimed item.
+	heartbeatTicker func(time.Duration) (<-chan time.Time, func())
+	execute         func(ctx context.Context, remote queue.Remote, item queue.Item) workerOutcome
+}
+
+// heartbeatEvery is how often a worker with an active run says it is alive
+// (RM-013). The cloud calls a worker offline after 90 s without one.
+const heartbeatEvery = 30 * time.Second
+
+func realTicker(every time.Duration) (<-chan time.Time, func()) {
+	ticker := time.NewTicker(every)
+	return ticker.C, ticker.Stop
+}
+
+// keepAlive sends `running n/N` every tick while at least one run is active,
+// so a run of twenty minutes does not leave the worker looking offline. It
+// stops with ctx. Best effort, like every heartbeat.
+func keepAlive(ctx context.Context, remote queue.Remote, running *atomic.Int32, capacity int, ticker func(time.Duration) (<-chan time.Time, func())) {
+	ticks, stop := ticker(heartbeatEvery)
+	defer stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			n := int(running.Load())
+			if n == 0 {
+				continue
+			}
+			beat := remote
+			beat.Running = n
+			_ = beat.Heartbeat(ctx, fmt.Sprintf("running %d/%d", n, capacity))
+		}
+	}
 }
 
 type workerOutcome struct {
@@ -71,6 +108,20 @@ func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, ba
 	outcomes := make(chan workerOutcome, capacity)
 	var materialize sync.Mutex
 	running := 0
+	var active atomic.Int32
+	ticker := options.heartbeatTicker
+	if ticker == nil {
+		ticker = realTicker
+	}
+	execute := options.execute
+	if execute == nil {
+		execute = func(ctx context.Context, workRemote queue.Remote, item queue.Item) workerOutcome {
+			return executeWorkerItem(ctx, workRemote, base, item, options, &materialize)
+		}
+	}
+	aliveCtx, stopAlive := context.WithCancel(ctx)
+	defer stopAlive()
+	go keepAlive(aliveCtx, remote, &active, capacity, ticker)
 	for {
 		claimed := false
 		for running < capacity {
@@ -89,11 +140,12 @@ func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, ba
 			}
 			claimed = true
 			running++
+			active.Store(int32(running))
 			remote.Running = running
 			_ = remote.Heartbeat(ctx, fmt.Sprintf("running %d/%d", running, capacity))
 			workRemote := remote
 			go func(item queue.Item, workRemote queue.Remote) {
-				outcomes <- executeWorkerItem(ctx, workRemote, base, item, options, &materialize)
+				outcomes <- execute(ctx, workRemote, item)
 			}(item, workRemote)
 			if options.Once {
 				break
@@ -143,6 +195,7 @@ func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, ba
 			return nil
 		case outcome := <-outcomes:
 			running--
+			active.Store(int32(running))
 			remote.Running = running
 			if err := remote.Done(ctx, outcome.item, outcome.report); err != nil {
 				return err
