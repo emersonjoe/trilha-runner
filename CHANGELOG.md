@@ -2,6 +2,19 @@
 
 This project follows semantic versioning.
 
+## Unreleased
+
+### Added
+
+- `make claude-key`, `make claude-key-status`, `make claude-key-forget` and `make e2e-claude`
+  (`scripts/anthropic-key.sh`): the Anthropic API key for the opt-in live Claude case lives in
+  the macOS Keychain, the Linux Secret Service or a 0600 file, is checked with the API before
+  it is stored, never goes on a command line and reaches only the test process. `make e2e-ollama`
+  runs the Ollama live cases.
+- The live Claude case uses `ANTHROPIC_API_KEY` when it is set, handed to the agent through the
+  run's AI config like a control plane's credential, and fails when the key appears in any file
+  the runs leave in the repository or anything the control plane received.
+
 ## 0.6.0 — 2026-10-25
 
 Protocol 0.4 (trilha-spec v0.4.0, spec 016) on the runner side: phase A of the dev-3.0 plan

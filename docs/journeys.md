@@ -673,16 +673,37 @@ I `TestAgentQuestionWithASecretIsRedacted`
 **J13.9 A real model follows the protocol (opt-in)** — E `TestLiveOllamaAsksAndTheAnswerContinues`,
 `TestLiveClaudeCodeAsksAndResumesTheSession`
 - Resources: compiled binary; Ollama on `localhost:11434` (`TRILHA_E2E_OLLAMA=1`, model
-  `TRILHA_E2E_OLLAMA_MODEL`, default `qwen2.5:7b`) or Claude Code logged in
-  (`TRILHA_E2E_CLAUDE=1`, `TRILHA_E2E_CLAUDE_MODEL`, default `haiku`; costs money). Skipped,
-  saying how to enable them, otherwise — never in CI.
+  `TRILHA_E2E_OLLAMA_MODEL`, default `qwen2.5:7b`; `make e2e-ollama`) or Claude Code with an
+  API key from the keychain (`make claude-key` once, then `make e2e-claude`; or a local Claude
+  Code login with `TRILHA_E2E_CLAUDE=1`; `TRILHA_E2E_CLAUDE_MODEL`, default `haiku`; costs
+  money). Skipped, saying how to enable them, otherwise — never in CI.
 - Preconditions: a synthetic repository whose task cannot be done without knowing the
   customer's greeting.
 - Data: the answer `Bom dia, cliente!`.
 - Steps: run the worker; answer the question in a continuation.
 - Expected: the first run ends `needs_input` with a non-empty question; the continuation
   writes `GREETING.txt` and its check passes; up to three tries, each logged, because small
-  models are not deterministic.
+  models are not deterministic. With an API key, no file the runs leave in the repository
+  (worktree, agent log, outbox, evidence, settings) and nothing the control plane received
+  contains it.
+
+**J13.10 The live tests' API key stays in the keychain and never leaks** — U `TestKeyLeakGuardFindsTheKeyInFilesAndInWhatTheCloudReceived`,
+I `TestAnthropicKeyStoresChecksRunsAndForgets`, `TestAnthropicKeyRefusesWhatTheAPIRefusesAndWhatIsNotAKey`,
+`TestAnthropicKeyNeverPassesTheKeyAsAnArgument`
+- Resources: bash, httptest (a fake Anthropic API that accepts one synthetic key), a temporary
+  config directory (the script's file store, `ANTHROPIC_KEY_BACKEND=file`).
+- Preconditions: no key stored.
+- Data: a synthetic key marked FAKE; a variant the fake API answers 401; an empty value,
+  `hunter2`, a too-short key and a key followed by a shell command.
+- Steps: `scripts/anthropic-key.sh set` from stdin, `status`, `exec -- CMD`, the key file made
+  readable by others, `forget`; the leak guard over a clean run, then over a log line and a
+  progress message holding the key.
+- Expected: the key is stored only after the API accepts it, mode 0600, and printed only masked
+  (`sk-ant-…` and the last four); `exec` hands it to that one process's environment; a file
+  readable by others is refused; after `forget` the file is gone and `exec` says to run
+  `make claude-key`; a refused or malformed key stores nothing; no line of the script passes
+  the key to `curl`, `security` or `secret-tool` as an argument; the guard reports both leaks
+  and nothing for a clean run.
 
 ## J14 — Review, hunt, variants and review comments · high
 

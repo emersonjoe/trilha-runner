@@ -298,7 +298,25 @@ conduz o driver `ai` contra o Ollama em `localhost:11434` (`TRILHA_E2E_OLLAMA_MO
 (`TRILHA_E2E_CLAUDE_MODEL`, padrão `haiku`; custa dinheiro). Os dois fazem uma pergunta,
 respondem numa continuação e conferem o resultado; o conjunto do Ollama também roda uma caça
 só-leitura num erro de uma posição plantado e espera um achado válido. Cada um tenta até três
-vezes (`TRILHA_E2E_TRIES` reduz): `TRILHA_E2E_OLLAMA=1 go test ./cmd/trilha-runner -run TestLive -v`.
+vezes (`TRILHA_E2E_TRIES` reduz): `make e2e-ollama`.
+
+Para o `claude-code` com chave de API em vez de login, guarde a chave no chaveiro do sistema,
+não num perfil de shell nem num arquivo `.env`:
+
+```bash
+make claude-key          # pede a chave (sem mostrar), confere com a API e guarda
+make e2e-claude          # roda o caso ao vivo do Claude com a chave só para esse processo
+make claude-key-status   # onde está, mascarada, e se a API ainda a aceita
+make claude-key-forget   # apaga (revogue também no Console quando terminar)
+```
+
+A chave fica no Keychain do macOS, no Secret Service do Linux (`secret-tool`) ou, na falta
+deles, num arquivo 0600 em `~/.config/trilha`. O `make claude-key` também lê da entrada padrão,
+então um gerenciador de senhas pode entregá-la (`op read 'op://…' | make claude-key`). Ela nunca
+vai para uma linha de comando, só aparece mascarada, chega ao agente como chegaria a credencial
+de um control plane, e o caso ao vivo falha se ela aparecer em qualquer arquivo que a run deixa
+ou em algo enviado ao control plane. Use uma chave de um workspace separado do Console com
+limite de gasto baixo.
 
 ## Licença
 

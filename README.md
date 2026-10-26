@@ -298,7 +298,24 @@ Live cases run a real model and are opt-in, never in CI: `TRILHA_E2E_OLLAMA=1` d
 (`TRILHA_E2E_CLAUDE_MODEL`, default `haiku`; it costs money). Both ask a question, answer it in a
 continuation and check the result; the Ollama set also runs a read-only hunt on a planted
 off-by-one and expects a valid finding. Each tries up to three times (`TRILHA_E2E_TRIES` lowers it):
-`TRILHA_E2E_OLLAMA=1 go test ./cmd/trilha-runner -run TestLive -v`.
+`make e2e-ollama`.
+
+For `claude-code` with an API key instead of a login, keep the key in the system keychain, not
+in a shell profile or a `.env` file:
+
+```bash
+make claude-key          # asks for the key (hidden), checks it with the API, stores it
+make e2e-claude          # runs the live Claude case with the key for that process alone
+make claude-key-status   # where it is, masked, and whether the API still accepts it
+make claude-key-forget   # removes it (revoke it in the Console too when you are done)
+```
+
+The key lives in the macOS Keychain, the Linux Secret Service (`secret-tool`), or else a 0600
+file under `~/.config/trilha`. `make claude-key` also reads it from stdin, so a password manager
+can feed it (`op read 'op://…' | make claude-key`). It never goes on a command line, is printed
+only masked, reaches the agent the way a control plane's credential does, and the live case
+fails if it shows up in any file the run leaves or anything sent to the control plane. Use a
+key from a separate Console workspace with a low spend limit.
 
 ## License
 
