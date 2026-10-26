@@ -683,15 +683,37 @@ I `TestAgentQuestionWithASecretIsRedacted`
 **J13.9 Um modelo real segue o protocolo (opcional)** — E `TestLiveOllamaAsksAndTheAnswerContinues`,
 `TestLiveClaudeCodeAsksAndResumesTheSession`
 - Recursos: binário compilado; Ollama em `localhost:11434` (`TRILHA_E2E_OLLAMA=1`, modelo
-  `TRILHA_E2E_OLLAMA_MODEL`, padrão `qwen2.5:7b`) ou Claude Code logado (`TRILHA_E2E_CLAUDE=1`,
-  `TRILHA_E2E_CLAUDE_MODEL`, padrão `haiku`; custa dinheiro). Pulados, dizendo como ligar, nos
-  demais casos — nunca no CI.
+  `TRILHA_E2E_OLLAMA_MODEL`, padrão `qwen2.5:7b`; `make e2e-ollama`) ou Claude Code com uma
+  chave de API do chaveiro do sistema (`make claude-key` uma vez, depois `make e2e-claude`; ou o
+  login local do Claude Code com `TRILHA_E2E_CLAUDE=1`; `TRILHA_E2E_CLAUDE_MODEL`, padrão
+  `haiku`; custa dinheiro). Pulados, dizendo como ligar, nos demais casos — nunca no CI.
 - Pré-condições: um repositório sintético cuja task não se cumpre sem saber a saudação do cliente.
 - Dados: a resposta `Bom dia, cliente!`.
 - Passos: rodar o worker; responder a pergunta numa continuação.
 - Esperado: a primeira run termina `needs_input` com uma pergunta não vazia; a continuação
   escreve `GREETING.txt` e o check passa; até três tentativas, cada uma registrada, porque
-  modelos pequenos não são determinísticos.
+  modelos pequenos não são determinísticos. Com chave de API, nenhum arquivo que as runs
+  deixam no repositório (worktree, log do agente, outbox, evidência, settings) nem nada que o
+  control plane recebeu a contém.
+
+**J13.10 A chave de API dos testes ao vivo fica no chaveiro e nunca vaza** — U `TestKeyLeakGuardFindsTheKeyInFilesAndInWhatTheCloudReceived`,
+I `TestAnthropicKeyStoresChecksRunsAndForgets`, `TestAnthropicKeyRefusesWhatTheAPIRefusesAndWhatIsNotAKey`,
+`TestAnthropicKeyNeverPassesTheKeyAsAnArgument`
+- Recursos: bash, httptest (uma API da Anthropic falsa que aceita uma chave sintética), um
+  diretório de configuração temporário (o armazenamento em arquivo do script,
+  `ANTHROPIC_KEY_BACKEND=file`).
+- Pré-condições: nenhuma chave guardada.
+- Dados: uma chave sintética marcada FAKE; uma variante que a API falsa responde 401; valor
+  vazio, `hunter2`, uma chave curta demais e uma chave seguida de um comando de shell.
+- Passos: `scripts/anthropic-key.sh set` pela entrada padrão, `status`, `exec -- CMD`, o arquivo
+  da chave legível por outros, `forget`; a guarda de vazamento sobre uma run limpa e depois
+  sobre uma linha de log e uma mensagem de progresso com a chave.
+- Esperado: a chave só é guardada depois que a API a aceita, com modo 0600, e só aparece
+  mascarada (`sk-ant-…` e os quatro últimos); `exec` a entrega ao ambiente daquele único
+  processo; um arquivo legível por outros é recusado; depois do `forget` o arquivo some e `exec`
+  diz para rodar `make claude-key`; chave recusada ou malformada não guarda nada; nenhuma linha
+  do script passa a chave como argumento a `curl`, `security` ou `secret-tool`; a guarda acusa
+  os dois vazamentos e nada numa run limpa.
 
 ## J14 — Revisão, caça, variantes e comentários de revisão · alta
 
