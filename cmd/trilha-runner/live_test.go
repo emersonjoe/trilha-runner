@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,7 +20,14 @@ import (
 // did the answer lead to passing checks — and tries up to three times,
 // logging every attempt.
 
-const liveTries = 3
+// liveTries answers how many times a live case may try: three, or
+// TRILHA_E2E_TRIES (1 to 3) to spend less.
+func liveTries() int {
+	if n, err := strconv.Atoi(os.Getenv("TRILHA_E2E_TRIES")); err == nil && n >= 1 && n <= 3 {
+		return n
+	}
+	return 3
+}
 
 // greetingRepo is a tiny synthetic project whose one task cannot be done
 // without asking: the greeting is nowhere in it.
@@ -68,14 +76,15 @@ func liveFlow(t *testing.T, try int, drv string, ai *queue.AI) (asked, continued
 
 func liveCase(t *testing.T, drv string, ai *queue.AI) {
 	useBinary(t)
-	for try := 1; try <= liveTries; try++ {
+	tries := liveTries()
+	for try := 1; try <= tries; try++ {
 		asked, continued := liveFlow(t, try, drv, ai)
 		if asked && continued {
-			t.Logf("protocol path held on try %d of %d", try, liveTries)
+			t.Logf("protocol path held on try %d of %d", try, tries)
 			return
 		}
 	}
-	t.Fatalf("the model did not follow ask → answer → checks in %d tries (see the log above)", liveTries)
+	t.Fatalf("the model did not follow ask → answer → checks in %d tries (see the log above)", tries)
 }
 
 // TRILHA_E2E_OLLAMA=1: the ai driver against local Ollama

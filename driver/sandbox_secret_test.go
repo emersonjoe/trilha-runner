@@ -75,3 +75,25 @@ func TestCredentialEnv(t *testing.T) {
 		t.Fatalf("oauth token = %v", got)
 	}
 }
+
+// An agent gets an allow-listed environment: the worker's own secrets and
+// the parent agent's variables stay behind, while USER and LOGNAME go through
+// — Claude Code on macOS finds a local login in the keychain by user, and
+// without them answers "Not logged in".
+func TestExecEnvironmentIsAnAllowList(t *testing.T) {
+	t.Setenv("USER", "t")
+	t.Setenv("LOGNAME", "t")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "FAKE-SECRET-value")
+	t.Setenv("CLAUDECODE", "1")
+	got := strings.Join(execEnvironment(), "\n")
+	for _, want := range []string{"USER=t", "LOGNAME=t"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%s not forwarded", want)
+		}
+	}
+	for _, unwanted := range []string{"AWS_SECRET_ACCESS_KEY", "CLAUDECODE"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("%s forwarded", unwanted)
+		}
+	}
+}

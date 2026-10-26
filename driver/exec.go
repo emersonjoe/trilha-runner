@@ -193,7 +193,7 @@ func runArgs(ctx context.Context, job Job, args []string, command string) (Outpu
 }
 
 func execEnvironment() []string {
-	allowed := []string{"PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "CGO_ENABLED", "GOCACHE", "GOMODCACHE", "GOPATH", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN", "SSL_CERT_FILE", "SSL_CERT_DIR"}
+	allowed := []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "CGO_ENABLED", "GOCACHE", "GOMODCACHE", "GOPATH", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN", "SSL_CERT_FILE", "SSL_CERT_DIR"}
 	environment := make([]string, 0, len(allowed))
 	for _, name := range allowed {
 		if value, ok := os.LookupEnv(name); ok {

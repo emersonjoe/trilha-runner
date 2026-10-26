@@ -181,12 +181,15 @@ Worst impact: a token visible in `ps`, in evidence, in a log or sent to the clou
 - Steps: execute the deployment.
 - Expected: it passes; the log has `[REDACTED]` and never `private-value`.
 
-**J3.4 Only known credential variables are forwarded** — U `TestCredentialEnv`
+**J3.4 Only known credential variables are forwarded** — U `TestCredentialEnv`, `TestExecEnvironmentIsAnAllowList`
 - Resources: none.
-- Preconditions: none.
+- Preconditions: none; then a worker environment with `USER`, `LOGNAME`, a fake AWS secret and
+  `CLAUDECODE`.
 - Data: no config; config without credential; an API key; an OAuth token.
-- Steps: ask for the credential environment.
-- Expected: nothing, nothing, `ANTHROPIC_API_KEY=…`, `CLAUDE_CODE_OAUTH_TOKEN=…`.
+- Steps: ask for the credential environment; build an agent's environment.
+- Expected: nothing, nothing, `ANTHROPIC_API_KEY=…`, `CLAUDE_CODE_OAUTH_TOKEN=…`; the agent gets
+  `USER` and `LOGNAME` (Claude Code finds a local login by user) and neither the secret nor the
+  parent agent's variables.
 
 ## J4 — Cross-repository dependencies · high
 

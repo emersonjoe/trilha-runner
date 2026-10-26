@@ -184,12 +184,15 @@ Pior impacto: token visível no `ps`, na evidência, num log ou enviado ao cloud
 - Passos: executar o deploy.
 - Esperado: passa; o log tem `[REDACTED]` e nunca `private-value`.
 
-**J3.4 Só variáveis de credencial conhecidas são repassadas** — U `TestCredentialEnv`
+**J3.4 Só variáveis de credencial conhecidas são repassadas** — U `TestCredentialEnv`, `TestExecEnvironmentIsAnAllowList`
 - Recursos: nenhum.
-- Pré-condições: nenhuma.
+- Pré-condições: nenhuma; depois um ambiente de worker com `USER`, `LOGNAME`, um segredo AWS
+  falso e `CLAUDECODE`.
 - Dados: sem configuração; configuração sem credencial; uma chave de API; um token OAuth.
-- Passos: pedir o ambiente de credencial.
-- Esperado: nada, nada, `ANTHROPIC_API_KEY=…`, `CLAUDE_CODE_OAUTH_TOKEN=…`.
+- Passos: pedir o ambiente de credencial; montar o ambiente de um agente.
+- Esperado: nada, nada, `ANTHROPIC_API_KEY=…`, `CLAUDE_CODE_OAUTH_TOKEN=…`; o agente recebe
+  `USER` e `LOGNAME` (o Claude Code acha um login local pelo usuário) e nem o segredo nem as
+  variáveis do agente pai.
 
 ## J4 — Dependências entre repositórios · alta
 
