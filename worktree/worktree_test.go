@@ -175,3 +175,35 @@ func TestIsRepo(t *testing.T) {
 		t.Fatal("repository without a commit was accepted")
 	}
 }
+
+// DV-12: the branch's diff in numbers — files, insertions, deletions — from
+// the checkout's HEAD to the task's commit, over two commits; a binary file
+// counts as a file with nothing added or removed.
+func TestNumStatCountsWhatTheBranchChanged(t *testing.T) {
+	ctx := context.Background()
+	m := repo(t)
+	w, err := m.Create(ctx, "TASK-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats, err := m.NumStat(ctx, w); err != nil || stats.Files != 0 {
+		t.Fatalf("fresh branch: %+v %v", stats, err)
+	}
+	os.WriteFile(filepath.Join(w.Path, "README.md"), []byte("demo\nline two\nline three\n"), 0o644)
+	os.WriteFile(filepath.Join(w.Path, "new.txt"), []byte("a\nb\n"), 0o644)
+	if _, err := m.Commit(ctx, w, "one"); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(w.Path, "README.md"), []byte("line two\nline three\n"), 0o644)
+	os.WriteFile(filepath.Join(w.Path, "logo.bin"), []byte{0, 1, 2, 0, 255}, 0o644)
+	if _, err := m.Commit(ctx, w, "two"); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := m.NumStat(ctx, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Files != 3 || stats.Insertions != 4 || stats.Deletions != 1 {
+		t.Fatalf("stats = %+v, want 3 files, 4 insertions, 1 deletion", stats)
+	}
+}

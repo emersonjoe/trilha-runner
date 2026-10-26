@@ -14,8 +14,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/emersonjoe/trilha-spec/execution"
 	"github.com/emersonjoe/trilha-spec/spec"
 )
 
@@ -119,6 +121,40 @@ func (m Manager) DiffStat(ctx context.Context, w Worktree) (string, error) {
 	}
 	out, err := m.git(ctx, w.Path, "diff", "--stat", strings.TrimSpace(base), "HEAD")
 	return strings.TrimSpace(out), err
+}
+
+// NumStat counts what the task's branch changed since it left the checkout:
+// `git diff --numstat <checkout HEAD>...HEAD` in the worktree. Counts only —
+// a file, its insertions and deletions; a binary file is a file with 0/0. No
+// path or line leaves this function.
+func (m Manager) NumStat(ctx context.Context, w Worktree) (execution.DiffStats, error) {
+	base, err := m.git(ctx, m.Layout.Root, "rev-parse", "HEAD")
+	if err != nil {
+		return execution.DiffStats{}, err
+	}
+	out, err := m.git(ctx, w.Path, "diff", "--numstat", strings.TrimSpace(base)+"...HEAD")
+	if err != nil {
+		return execution.DiffStats{}, err
+	}
+	return parseNumStat(out), nil
+}
+
+func parseNumStat(out string) execution.DiffStats {
+	var stats execution.DiffStats
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) < 3 {
+			continue
+		}
+		stats.Files++
+		if added, err := strconv.Atoi(fields[0]); err == nil {
+			stats.Insertions += added
+		}
+		if deleted, err := strconv.Atoi(fields[1]); err == nil {
+			stats.Deletions += deleted
+		}
+	}
+	return stats
 }
 
 // IsRepo answers whether root is inside a git repository with a commit.

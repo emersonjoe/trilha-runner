@@ -324,6 +324,15 @@ que o cloud não lê.
   limpam a outbox, o 404 é posto de lado como `result.rejected.json` em vez de repetido para
   sempre (RM-012).
 
+**J5.12 O resultado conta o que mudou, nunca o conteúdo** — I `TestNumStatCountsWhatTheBranchChanged`
+- Recursos: git.
+- Pré-condições: a worktree de uma task com dois commits.
+- Dados: um arquivo editado (+2 −1), um arquivo de texto novo (+2), um arquivo binário.
+- Passos: contar o branch contra o HEAD do checkout.
+- Esperado: `diff_stats` de 3 arquivos, 4 inserções, 1 remoção (`git diff --numstat
+  <HEAD do checkout>...HEAD`); o binário é um arquivo com 0/0; um branch novo conta 0; nenhum
+  caminho ou linha vai para o resultado (DV-12).
+
 ## J6 — Trabalho criado na UI (bundles) · alta
 
 *O worker baixa um bundle, escreve spec e tasks em `.trilha/` e publica o branch.*

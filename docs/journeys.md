@@ -319,6 +319,15 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
   is cleared; at start every leftover result is sent before the first claim, 2xx and 409 clear
   the outbox, the 404 is set aside as `result.rejected.json` instead of retried forever (RM-012).
 
+**J5.12 The result counts what changed, never what it is** — I `TestNumStatCountsWhatTheBranchChanged`
+- Resources: git.
+- Preconditions: a task's worktree with two commits.
+- Data: a file edited (+2 −1), a new text file (+2), a binary file.
+- Steps: count the branch against the checkout's HEAD.
+- Expected: `diff_stats` of 3 files, 4 insertions, 1 deletion (`git diff --numstat
+  <checkout HEAD>...HEAD`); the binary is a file with 0/0; a fresh branch counts 0; no path or
+  line goes into the result (DV-12).
+
 ## J6 — Work created in the UI (bundles) · high
 
 *The worker downloads a bundle, writes its spec and tasks under `.trilha/` and publishes the branch.*
