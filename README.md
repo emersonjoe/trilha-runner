@@ -30,7 +30,7 @@ Without Go, every release carries one static binary per platform (`linux`/`darwi
 `amd64`/`arm64`) and a `sha256sums.txt`:
 
 ```bash
-v=0.6.0; os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
+v=0.7.0; os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
 curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/trilha-runner_${v}_${os}_${arch}"
 curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/sha256sums.txt"
 sha256sum --check --ignore-missing sha256sums.txt      # shasum -a 256 --check on macOS
@@ -121,13 +121,25 @@ and recent notes) is quoted into the pack too, labelled as information, never in
 result carries `question`, `session`, `overview`, `notes` and `diff_stats` (files, insertions,
 deletions from `git diff --numstat` against the checkout's HEAD — counts, never content).
 
+## Small changes
+
+A person reviews every line an agent changes, so every implement run is told to make the smallest
+change that meets the acceptance criteria and passes the checks: no refactoring, renaming,
+reformatting or files the task does not need, no new abstraction or dependency unless the task
+asks, and a `trilha-runner note` explaining why when a larger change seems needed — or a
+`trilha-runner ask` when it would change the task's scope. The AI review checks the same thing:
+every change the task does not need becomes a `medium` finding titled `Unneeded change: …` with
+its path and lines, and a diff much larger than the task needs gets the verdict `changes`. The
+result's `diff_stats` says how big the change is: insertions and deletions of the task's branch
+against the commit it was cut from.
+
 ## Review, hunt, variants and review comments (protocol 0.4)
 
 A claim's `kind` says what the run is for. `implement` (or nothing) is everything above.
 
 | Claim | What the runner does |
 |---|---|
-| `kind: review`, `review_mode: report` (the default) | a **read-only** review of the task's branch (`trilha/task-nnn`, or `-v<N>` when the claim carries `variant_index`) in a detached checkout of its own, `.trilha/runs/TASK-NNN-review-<run>/wt`; the prompt points at the merge base with the default branch and asks for correctness, security and test gaps; the result carries `review {verdict, findings}` and status `done` |
+| `kind: review`, `review_mode: report` (the default) | a **read-only** review of the task's branch (`trilha/task-nnn`, or `-v<N>` when the claim carries `variant_index`) in a detached checkout of its own, `.trilha/runs/TASK-NNN-review-<run>/wt`; the prompt points at the merge base with the default branch and asks for correctness, security, test gaps and changes the task does not need; the result carries `review {verdict, findings}` and status `done` |
 | `kind: review`, `review_mode: fix` | the same review on the task's branch itself: the agent may fix, the runner commits and runs the task's checks, the task goes back to `review`; the result carries the verdict and the findings |
 | `kind: hunt` | a **read-only** bug hunt pointed at `hunt_seed`'s area (entry points, error paths, data layer…) and style (pessimist, trace follower…), scoped to `git diff --name-only $(git merge-base <base> HEAD) HEAD`; the result carries `findings[]` stamped with the area and the style |
 | `variant_index: N` (N ≥ 1) | an implement run on its own branch, `trilha/task-nnn-v<N>`, in `.trilha/runs/TASK-NNN-vN/`; the runner writes `created-branch` there and never adopts a branch it cannot prove it created (an existing `-vN` it did not make moves the run to `-vN-2`, `-vN-3`…); its context pack holds no earlier evidence of the task and no note or overview an agent wrote — nothing of a sibling |
@@ -298,7 +310,24 @@ Live cases run a real model and are opt-in, never in CI: `TRILHA_E2E_OLLAMA=1` d
 (`TRILHA_E2E_CLAUDE_MODEL`, default `haiku`; it costs money). Both ask a question, answer it in a
 continuation and check the result; the Ollama set also runs a read-only hunt on a planted
 off-by-one and expects a valid finding. Each tries up to three times (`TRILHA_E2E_TRIES` lowers it):
-`TRILHA_E2E_OLLAMA=1 go test ./cmd/trilha-runner -run TestLive -v`.
+`make e2e-ollama`.
+
+For `claude-code` with an API key instead of a login, keep the key in the system keychain, not
+in a shell profile or a `.env` file:
+
+```bash
+make claude-key          # asks for the key (hidden), checks it with the API, stores it
+make e2e-claude          # runs the live Claude case with the key for that process alone
+make claude-key-status   # where it is, masked, and whether the API still accepts it
+make claude-key-forget   # removes it (revoke it in the Console too when you are done)
+```
+
+The key lives in the macOS Keychain, the Linux Secret Service (`secret-tool`), or else a 0600
+file under `~/.config/trilha`. `make claude-key` also reads it from stdin, so a password manager
+can feed it (`op read 'op://…' | make claude-key`). It never goes on a command line, is printed
+only masked, reaches the agent the way a control plane's credential does, and the live case
+fails if it shows up in any file the run leaves or anything sent to the control plane. Use a
+key from a separate Console workspace with a low spend limit.
 
 ## License
 

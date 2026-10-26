@@ -61,6 +61,10 @@ const findingParagraph = "Report each problem you can prove, one command per pro
 // run that breaks it.
 const readOnlyParagraph = "This run is read-only. Do not create, edit or delete any file in the worktree, do not commit, do not switch or move branches. When it ends, the runner checks that the worktree is clean and HEAD is where it started; a run that changed anything is refused and its findings are discarded. To publish a longer report, write it in the directory `$" + "TRILHA_ARTIFACT_DIR` (outside the worktree) and run `trilha-runner artifact <file>` (.md, .html, .png or .jpg).\n"
 
+// proportionCheck is the review's fourth question: is the change as small as
+// the task allows? A person reads every line of it.
+const proportionCheck = "4. Proportion: compare the whole diff since the merge base with what the task asks. Report every change the task does not need — a refactor, a rename, reformatting, a new abstraction or dependency, an unrelated file, dead code — as its own finding with severity `medium`, a title that starts with `Unneeded change:`, and its path and lines. When the diff is much larger than the task needs, the verdict is `changes`, even if every line is correct.\n"
+
 // reviewPrompt is the job of a review run, in report or fix mode.
 func reviewPrompt(scope inspectionScope, reviewOf string, mode execution.ReviewMode) string {
 	var b strings.Builder
@@ -74,8 +78,9 @@ func reviewPrompt(scope inspectionScope, reviewOf string, mode execution.ReviewM
 	b.WriteString("Compare the branch with its merge base and look for:\n\n")
 	b.WriteString("1. Correctness: wrong logic, missed edge cases, off-by-one errors, error handling that loses or hides failures, broken contracts with callers.\n")
 	b.WriteString("2. Security: injection, unchecked input, secrets in code or logs, missing authorization, unsafe file or network access.\n")
-	b.WriteString("3. Test gaps: changed behaviour without a test, tests that cannot fail, acceptance criteria of the task that nothing checks.\n\n")
-	b.WriteString("## How to report\n\n")
+	b.WriteString("3. Test gaps: changed behaviour without a test, tests that cannot fail, acceptance criteria of the task that nothing checks.\n")
+	b.WriteString(proportionCheck)
+	b.WriteString("\n## How to report\n\n")
 	b.WriteString(findingParagraph)
 	b.WriteString("\nEnd with the verdict: `trilha-runner verdict pass` when nothing needs to change, `trilha-runner verdict changes` when at least one finding must be fixed (or the `verdict` tool). Without a verdict, the runner says `changes` when there are findings and `pass` when there are none.\n\n")
 	if mode == execution.ReviewFix {

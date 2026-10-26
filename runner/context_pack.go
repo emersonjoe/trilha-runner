@@ -71,6 +71,14 @@ If you cannot complete the task because information is missing and the worktree 
 To leave memory for the next run of this task: ` + "`trilha-runner note \"<one fact>\"`" + ` for something it should know, ` + "`trilha-runner overview \"<one or two sentences>\"`" + ` for what is being done and where it stands. Never put a secret in a question, a note or an overview.
 `
 
+// smallChangeParagraph is the rule of every run that implements a task: a
+// person reviews every line it changes, so it changes as few as it can.
+const smallChangeParagraph = `
+## Keep the change small
+
+Make the smallest change that meets the acceptance criteria and passes the checks. Do not refactor, rename, reformat or touch files the task does not need. Add no new abstraction or dependency unless the task asks for one. If a larger change seems needed, explain why with ` + "`trilha-runner note \"<why>\"`" + `; if it would change the task's scope, ask first with ` + "`trilha-runner ask \"<question>\"`" + ` and stop.
+`
+
 // agentSections is what the runner adds to the context pack: the task's
 // memory from the control plane, the answer to the question an earlier run
 // asked (when the conversation is not resumed), and how to ask. Everything

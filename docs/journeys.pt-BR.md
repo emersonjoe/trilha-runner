@@ -327,14 +327,22 @@ que o cloud não lê.
   limpam a outbox, o 404 é posto de lado como `result.rejected.json` em vez de repetido para
   sempre (RM-012).
 
-**J5.12 O resultado conta o que mudou, nunca o conteúdo** — I `TestNumStatCountsWhatTheBranchChanged`
-- Recursos: git.
-- Pré-condições: a worktree de uma task com dois commits.
-- Dados: um arquivo editado (+2 −1), um arquivo de texto novo (+2), um arquivo binário.
-- Passos: contar o branch contra o HEAD do checkout.
+**J5.12 O resultado conta o que mudou, nunca o conteúdo** — I `TestNumStatCountsWhatTheBranchChanged`,
+`TestNumStatIgnoresWhatTheCheckoutGainedAfterTheCut`, `TestDiffStatsCountWhatTheTaskBranchChanged`
+- Recursos: git, sh.
+- Pré-condições: a worktree de uma task com dois commits; uma task cujo branch ganhou três
+  linhas, depois do que o mantenedor fez commit de um arquivo de 50 linhas no checkout; um
+  repositório com um `steps.go` de 40 linhas e uma task `ready`.
+- Dados: um arquivo editado (+2 −1), um arquivo de texto novo (+2), um arquivo binário; uma run
+  de implementação que acrescenta três linhas ao `README.md`, e uma que indenta todas as linhas
+  de `steps.go`.
+- Passos: contar o branch contra o HEAD do checkout; rodar cada run de implementação.
 - Esperado: `diff_stats` de 3 arquivos, 4 inserções, 1 remoção (`git diff --numstat
-  <HEAD do checkout>...HEAD`); o binário é um arquivo com 0/0; um branch novo conta 0; nenhum
-  caminho ou linha vai para o resultado (DV-12).
+  <HEAD do checkout>...HEAD`); o binário é um arquivo com 0/0; um branch novo conta 0; o commit
+  posterior do mantenedor não conta (1 arquivo, 3 inserções); o resultado da run de
+  implementação diz 1 arquivo, 3 inserções para as três linhas e 1 arquivo, 40 inserções, 40
+  remoções para a reformatação — o tamanho real da mudança; nenhum caminho ou linha vai para o
+  resultado (DV-12).
 
 ## J6 — Trabalho criado na UI (bundles) · alta
 
@@ -525,6 +533,21 @@ Pior impacto: um agente que escreve ou executa fora do seu worktree.
 - Passos: `trilha-runner drivers`.
 - Esperado: `ai`, `claude-code`, `echo`, `exec`, um por linha.
 
+**J10.3 O `claude-code` informa o modelo, os tokens e o custo que usou** — U `TestClaudeCodeReportsModelTokensAndCostFromItsJSONResult`,
+`TestClaudeCodeWithoutAJSONResultKeepsTheText`, `TestTheCostTheAgentReportsWinsOverTheEstimate`
+- Recursos: sh (um `claude` falso no `PATH`).
+- Pré-condições: um claim com o provedor `claude-code` e uma credencial inventada.
+- Dados: uma linha de resultado JSON depois de um aviso no stderr — mensagem final com a
+  credencial, 10 tokens de entrada, 26.307 de escrita em cache, 5 de leitura em cache e 40 de
+  saída, `total_cost_usd` 0,03309375, modelo `claude-haiku-4-5-20251001`; depois um `claude`
+  que só imprime texto; `TRILHA_AI_COST_PER_MILLION_TOKENS=1`.
+- Passos: executar o driver; montar a tentativa e o resultado a partir da saída, duas vezes.
+- Esperado: o argv pede `--output-format json`; o relatório é a mensagem final, redigida;
+  saem modelo, provedor `anthropic`, entrada 26.322 (cache conta como entrada), saída 40, total
+  26.362, três turnos e custo de 0,03309375 USD; o custo informado vence a estimativa por token
+  na tentativa e soma entre tentativas; texto puro fica como relatório e nada de modelo ou
+  custo é inventado; sem custo informado a estimativa continua valendo.
+
 ## J11 — Release · baixa
 
 **J11.1 O binário reporta a versão que foi publicada** — U `TestVersionMatchesTheNewestChangelogEntry`
@@ -683,15 +706,37 @@ I `TestAgentQuestionWithASecretIsRedacted`
 **J13.9 Um modelo real segue o protocolo (opcional)** — E `TestLiveOllamaAsksAndTheAnswerContinues`,
 `TestLiveClaudeCodeAsksAndResumesTheSession`
 - Recursos: binário compilado; Ollama em `localhost:11434` (`TRILHA_E2E_OLLAMA=1`, modelo
-  `TRILHA_E2E_OLLAMA_MODEL`, padrão `qwen2.5:7b`) ou Claude Code logado (`TRILHA_E2E_CLAUDE=1`,
-  `TRILHA_E2E_CLAUDE_MODEL`, padrão `haiku`; custa dinheiro). Pulados, dizendo como ligar, nos
-  demais casos — nunca no CI.
+  `TRILHA_E2E_OLLAMA_MODEL`, padrão `qwen2.5:7b`; `make e2e-ollama`) ou Claude Code com uma
+  chave de API do chaveiro do sistema (`make claude-key` uma vez, depois `make e2e-claude`; ou o
+  login local do Claude Code com `TRILHA_E2E_CLAUDE=1`; `TRILHA_E2E_CLAUDE_MODEL`, padrão
+  `haiku`; custa dinheiro). Pulados, dizendo como ligar, nos demais casos — nunca no CI.
 - Pré-condições: um repositório sintético cuja task não se cumpre sem saber a saudação do cliente.
 - Dados: a resposta `Bom dia, cliente!`.
 - Passos: rodar o worker; responder a pergunta numa continuação.
 - Esperado: a primeira run termina `needs_input` com uma pergunta não vazia; a continuação
   escreve `GREETING.txt` e o check passa; até três tentativas, cada uma registrada, porque
-  modelos pequenos não são determinísticos.
+  modelos pequenos não são determinísticos. Com chave de API, nenhum arquivo que as runs
+  deixam no repositório (worktree, log do agente, outbox, evidência, settings) nem nada que o
+  control plane recebeu a contém.
+
+**J13.10 A chave de API dos testes ao vivo fica no chaveiro e nunca vaza** — U `TestKeyLeakGuardFindsTheKeyInFilesAndInWhatTheCloudReceived`,
+I `TestAnthropicKeyStoresChecksRunsAndForgets`, `TestAnthropicKeyRefusesWhatTheAPIRefusesAndWhatIsNotAKey`,
+`TestAnthropicKeyNeverPassesTheKeyAsAnArgument`
+- Recursos: bash, httptest (uma API da Anthropic falsa que aceita uma chave sintética), um
+  diretório de configuração temporário (o armazenamento em arquivo do script,
+  `ANTHROPIC_KEY_BACKEND=file`).
+- Pré-condições: nenhuma chave guardada.
+- Dados: uma chave sintética marcada FAKE; uma variante que a API falsa responde 401; valor
+  vazio, `hunter2`, uma chave curta demais e uma chave seguida de um comando de shell.
+- Passos: `scripts/anthropic-key.sh set` pela entrada padrão, `status`, `exec -- CMD`, o arquivo
+  da chave legível por outros, `forget`; a guarda de vazamento sobre uma run limpa e depois
+  sobre uma linha de log e uma mensagem de progresso com a chave.
+- Esperado: a chave só é guardada depois que a API a aceita, com modo 0600, e só aparece
+  mascarada (`sk-ant-…` e os quatro últimos); `exec` a entrega ao ambiente daquele único
+  processo; um arquivo legível por outros é recusado; depois do `forget` o arquivo some e `exec`
+  diz para rodar `make claude-key`; chave recusada ou malformada não guarda nada; nenhuma linha
+  do script passa a chave como argumento a `curl`, `security` ou `secret-tool`; a guarda acusa
+  os dois vazamentos e nada numa run limpa.
 
 ## J14 — Revisão, caça, variantes e comentários de revisão · alta
 
@@ -840,6 +885,21 @@ I `TestAIDriverReportsFindingsVerdictRepliesAndArtifacts`
 - Esperado: a run fica `done` na ponta do branch, o branch não se move, nada é recusado por
   política, e pelo menos um achado é válido e cita um arquivo do branch; até três tentativas,
   cada uma registrada, porque modelos pequenos não são determinísticos.
+
+**J14.12 O agente recebe a ordem de manter a mudança pequena, e a revisão confere** — I `TestImplementPromptAsksForTheSmallestChange`
+- Recursos: git, sh.
+- Pré-condições: uma task `ready`; TASK-001 em `review` com seu branch.
+- Dados: uma run de implementação; uma revisão em modo report, uma em modo fix, uma caça com
+  seed 3.
+- Passos: rodar cada uma e ler o prompt que o agente recebeu.
+- Esperado: o prompt de implementação tem "Keep the change small": a menor mudança que atende aos
+  critérios de aceite e passa nos checks, nada de refatorar, renomear, reformatar ou mexer em
+  arquivo de que a task não precisa, nenhuma abstração ou dependência nova sem pedido,
+  `trilha-runner note` para explicar uma mudança maior e `trilha-runner ask` antes de mudar o
+  escopo — e não a verificação da revisão. As duas revisões têm "4. Proportion": cada mudança de
+  que a task não precisa é um achado `medium` com título `Unneeded change:`, caminho e linhas, e
+  um diff muito maior do que a task precisa recebe o veredito `changes`. Nem as revisões nem a
+  caça recebem a seção de implementação; a caça não recebe nenhuma das duas.
 
 ## J15 — Operações de worktree e código de fork · alta
 

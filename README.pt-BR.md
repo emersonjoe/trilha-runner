@@ -30,7 +30,7 @@ Sem Go, toda release traz um binário estático por plataforma (`linux`/`darwin`
 `amd64`/`arm64`) e um `sha256sums.txt`:
 
 ```bash
-v=0.6.0; os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
+v=0.7.0; os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
 curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/trilha-runner_${v}_${os}_${arch}"
 curl -sSLO "https://github.com/emersonjoe/trilha-runner/releases/download/v$v/sha256sums.txt"
 sha256sum --check --ignore-missing sha256sums.txt      # shasum -a 256 --check no macOS
@@ -122,13 +122,25 @@ notas recentes) também entra citado no pacote, rotulado como informação, nunc
 resultado traz `question`, `session`, `overview`, `notes` e `diff_stats` (arquivos, inserções,
 remoções de `git diff --numstat` contra o HEAD do checkout — contagens, nunca conteúdo).
 
+## Mudanças pequenas
+
+Uma pessoa revisa cada linha que um agente muda, então toda run de implementação recebe a ordem
+de fazer a menor mudança que atende aos critérios de aceite e passa nos checks: nada de
+refatorar, renomear, reformatar ou mexer em arquivos de que a task não precisa, nenhuma
+abstração ou dependência nova sem a task pedir, e uma `trilha-runner note` explicando o porquê
+quando uma mudança maior parecer necessária — ou um `trilha-runner ask` quando ela mudaria o
+escopo da task. A revisão por IA confere o mesmo: cada mudança de que a task não precisa vira um
+achado `medium` com título `Unneeded change: …`, caminho e linhas, e um diff muito maior do que a
+task precisa recebe o veredito `changes`. O `diff_stats` do resultado diz o tamanho da mudança:
+inserções e remoções do branch da task contra o commit de onde ele saiu.
+
 ## Revisão, caça, variantes e comentários de revisão (protocolo 0.4)
 
 O `kind` da reivindicação diz para que serve a run. `implement` (ou nada) é tudo o que está acima.
 
 | Reivindicação | O que o runner faz |
 |---|---|
-| `kind: review`, `review_mode: report` (o padrão) | uma revisão **só-leitura** do branch da task (`trilha/task-nnn`, ou `-v<N>` quando a reivindicação traz `variant_index`) num checkout destacado próprio, `.trilha/runs/TASK-NNN-review-<run>/wt`; o prompt aponta para o merge base com o branch padrão e pede problemas de correção, segurança e lacunas de teste; o resultado traz `review {verdict, findings}` e status `done` |
+| `kind: review`, `review_mode: report` (o padrão) | uma revisão **só-leitura** do branch da task (`trilha/task-nnn`, ou `-v<N>` quando a reivindicação traz `variant_index`) num checkout destacado próprio, `.trilha/runs/TASK-NNN-review-<run>/wt`; o prompt aponta para o merge base com o branch padrão e pede problemas de correção, segurança, lacunas de teste e mudanças de que a task não precisa; o resultado traz `review {verdict, findings}` e status `done` |
 | `kind: review`, `review_mode: fix` | a mesma revisão no próprio branch da task: o agente pode corrigir, o runner faz commit e roda os checks da task, a task volta a `review`; o resultado traz o veredito e os achados |
 | `kind: hunt` | uma caça a bugs **só-leitura** apontada para a área (portas de entrada, caminhos de erro, camada de dados…) e o estilo (pessimista, seguidor de rastro…) de `hunt_seed`, com escopo `git diff --name-only $(git merge-base <base> HEAD) HEAD`; o resultado traz `findings[]` carimbados com a área e o estilo |
 | `variant_index: N` (N ≥ 1) | uma run de implementação no próprio branch, `trilha/task-nnn-v<N>`, em `.trilha/runs/TASK-NNN-vN/`; o runner grava `created-branch` ali e nunca adota um branch que não consegue provar que criou (um `-vN` existente que ele não fez leva a run para `-vN-2`, `-vN-3`…); o pacote de contexto não tem evidência anterior da task nem nota ou overview escritos por agente — nada de uma irmã |
@@ -298,7 +310,25 @@ conduz o driver `ai` contra o Ollama em `localhost:11434` (`TRILHA_E2E_OLLAMA_MO
 (`TRILHA_E2E_CLAUDE_MODEL`, padrão `haiku`; custa dinheiro). Os dois fazem uma pergunta,
 respondem numa continuação e conferem o resultado; o conjunto do Ollama também roda uma caça
 só-leitura num erro de uma posição plantado e espera um achado válido. Cada um tenta até três
-vezes (`TRILHA_E2E_TRIES` reduz): `TRILHA_E2E_OLLAMA=1 go test ./cmd/trilha-runner -run TestLive -v`.
+vezes (`TRILHA_E2E_TRIES` reduz): `make e2e-ollama`.
+
+Para o `claude-code` com chave de API em vez de login, guarde a chave no chaveiro do sistema,
+não num perfil de shell nem num arquivo `.env`:
+
+```bash
+make claude-key          # pede a chave (sem mostrar), confere com a API e guarda
+make e2e-claude          # roda o caso ao vivo do Claude com a chave só para esse processo
+make claude-key-status   # onde está, mascarada, e se a API ainda a aceita
+make claude-key-forget   # apaga (revogue também no Console quando terminar)
+```
+
+A chave fica no Keychain do macOS, no Secret Service do Linux (`secret-tool`) ou, na falta
+deles, num arquivo 0600 em `~/.config/trilha`. O `make claude-key` também lê da entrada padrão,
+então um gerenciador de senhas pode entregá-la (`op read 'op://…' | make claude-key`). Ela nunca
+vai para uma linha de comando, só aparece mascarada, chega ao agente como chegaria a credencial
+de um control plane, e o caso ao vivo falha se ela aparecer em qualquer arquivo que a run deixa
+ou em algo enviado ao control plane. Use uma chave de um workspace separado do Console com
+limite de gasto baixo.
 
 ## Licença
 

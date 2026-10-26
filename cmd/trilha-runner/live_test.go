@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +61,7 @@ exactly as given, into GREETING.txt and finish.
 func liveFlow(t *testing.T, try int, drv string, ai *queue.AI) (asked, continued bool) {
 	dir := greetingRepo(t)
 	cloud := &fakeCloud{items: []queue.Item{{ID: "run-000001", Project: "demo", TaskID: "TASK-001", AI: ai}}}
+	defer assertKeyNeverLeaked(t, ai, dir, cloud)
 	cloud.work(t, dir, drv, "")
 	first := cloud.results["run-000001"]
 	t.Logf("try %d, question run: status=%s passed=%v question=%+v session=%+v error=%q", try, first.Status, first.Passed, first.Question, first.Session, first.Error)
@@ -72,6 +75,71 @@ func liveFlow(t *testing.T, try int, drv string, ai *queue.AI) (asked, continued
 	greeting, _ := os.ReadFile(filepath.Join(dir, ".trilha", "runs", "TASK-001", "wt", "GREETING.txt"))
 	t.Logf("try %d, answer run: status=%s passed=%v GREETING.txt=%q session=%+v error=%q", try, second.Status, second.Passed, greeting, second.Session, second.Error)
 	return true, second.Status == "review" && second.Passed
+}
+
+// assertKeyNeverLeaked fails the case when the API key handed to the run
+// shows up anywhere it could stay.
+func assertKeyNeverLeaked(t *testing.T, ai *queue.AI, dir string, cloud *fakeCloud) {
+	t.Helper()
+	if ai == nil {
+		return
+	}
+	for _, where := range keyLeaks(ai.Credential, dir, cloud) {
+		t.Errorf("the API key leaked into %s", where)
+	}
+}
+
+// keyLeaks answers every place the key appears: a file in the repository
+// (worktree, agent log, outbox, evidence, checkpoint, settings) or what the
+// control plane received (progress and results).
+func keyLeaks(credential, dir string, cloud *fakeCloud) []string {
+	if len(credential) < 16 {
+		return nil
+	}
+	key := []byte(credential)
+	var leaks []string
+	filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if data, err := os.ReadFile(path); err == nil && bytes.Contains(data, key) {
+			rel, _ := filepath.Rel(dir, path)
+			leaks = append(leaks, rel)
+		}
+		return nil
+	})
+	cloud.mutex.Lock()
+	sent, _ := json.Marshal(struct {
+		Progress []queue.Progress
+		Results  map[string]queue.Result
+	}{cloud.progress, cloud.results})
+	cloud.mutex.Unlock()
+	if bytes.Contains(sent, key) {
+		leaks = append(leaks, "what the control plane received")
+	}
+	return leaks
+}
+
+// The live cases' leak guard is itself tested, offline: a guard that never
+// fires would prove nothing.
+func TestKeyLeakGuardFindsTheKeyInFilesAndInWhatTheCloudReceived(t *testing.T) {
+	const key = "sk-ant-api03-SYNTHETIC0000000000000000000000-FAKE"
+	dir := t.TempDir()
+	cloud := &fakeCloud{results: map[string]queue.Result{"run-000001": {Status: "review"}}}
+	os.MkdirAll(filepath.Join(dir, ".trilha", "runs", "TASK-001"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".trilha", "runs", "TASK-001", "agent.log"), []byte("clean log"), 0o644)
+	if leaks := keyLeaks(key, dir, cloud); len(leaks) != 0 {
+		t.Fatalf("a clean run reported leaks: %v", leaks)
+	}
+	os.WriteFile(filepath.Join(dir, ".trilha", "runs", "TASK-001", "agent.log"), []byte("env: ANTHROPIC_API_KEY="+key), 0o644)
+	cloud.progress = []queue.Progress{{Message: "using " + key}}
+	leaks := keyLeaks(key, dir, cloud)
+	if len(leaks) != 2 || leaks[0] != filepath.Join(".trilha", "runs", "TASK-001", "agent.log") || leaks[1] != "what the control plane received" {
+		t.Fatalf("the guard missed a leak: %v", leaks)
+	}
+	if keyLeaks("", dir, cloud) != nil {
+		t.Fatal("no credential, nothing to look for")
+	}
 }
 
 func liveCase(t *testing.T, drv string, ai *queue.AI) {
@@ -107,11 +175,13 @@ func TestLiveOllamaAsksAndTheAnswerContinues(t *testing.T) {
 	liveCase(t, "ai", &queue.AI{Provider: "openai", BaseURL: "http://localhost:11434/v1", Model: model, Credential: "ollama-local-FAKE"})
 }
 
-// TRILHA_E2E_CLAUDE=1: the claude-code driver with the local Claude Code
-// login (TRILHA_E2E_CLAUDE_MODEL, default haiku). It spends real money.
+// TRILHA_E2E_CLAUDE=1: the claude-code driver (TRILHA_E2E_CLAUDE_MODEL,
+// default haiku). It spends real money. With ANTHROPIC_API_KEY set, the key
+// reaches the agent the way a control plane's credential does (the claim's
+// AI config); without it, the local Claude Code login is used.
 func TestLiveClaudeCodeAsksAndResumesTheSession(t *testing.T) {
 	if os.Getenv("TRILHA_E2E_CLAUDE") != "1" {
-		t.Skip("opt-in: set TRILHA_E2E_CLAUDE=1 with Claude Code logged in (it costs money)")
+		t.Skip("opt-in: set TRILHA_E2E_CLAUDE=1 with ANTHROPIC_API_KEY or Claude Code logged in (it costs money)")
 	}
 	if runtime.GOOS == "windows" {
 		t.Skip("uses sh")
@@ -120,7 +190,7 @@ func TestLiveClaudeCodeAsksAndResumesTheSession(t *testing.T) {
 	if model == "" {
 		model = "haiku"
 	}
-	liveCase(t, "", &queue.AI{Provider: "claude-code", Model: model})
+	liveCase(t, "", &queue.AI{Provider: "claude-code", Model: model, Credential: os.Getenv("ANTHROPIC_API_KEY")})
 }
 
 // buggyRepo is a tiny synthetic Go project whose task branch carries an

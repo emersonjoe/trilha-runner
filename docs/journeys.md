@@ -322,14 +322,20 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
   is cleared; at start every leftover result is sent before the first claim, 2xx and 409 clear
   the outbox, the 404 is set aside as `result.rejected.json` instead of retried forever (RM-012).
 
-**J5.12 The result counts what changed, never what it is** — I `TestNumStatCountsWhatTheBranchChanged`
-- Resources: git.
-- Preconditions: a task's worktree with two commits.
-- Data: a file edited (+2 −1), a new text file (+2), a binary file.
-- Steps: count the branch against the checkout's HEAD.
+**J5.12 The result counts what changed, never what it is** — I `TestNumStatCountsWhatTheBranchChanged`,
+`TestNumStatIgnoresWhatTheCheckoutGainedAfterTheCut`, `TestDiffStatsCountWhatTheTaskBranchChanged`
+- Resources: git, sh.
+- Preconditions: a task's worktree with two commits; a task whose branch got three lines, after
+  which the maintainer committed a 50-line file on the checkout; a repository with a 40-line
+  `steps.go` and a `ready` task.
+- Data: a file edited (+2 −1), a new text file (+2), a binary file; an implement run that adds
+  three lines to `README.md`, and one that indents every line of `steps.go`.
+- Steps: count the branch against the checkout's HEAD; run each implement run.
 - Expected: `diff_stats` of 3 files, 4 insertions, 1 deletion (`git diff --numstat
-  <checkout HEAD>...HEAD`); the binary is a file with 0/0; a fresh branch counts 0; no path or
-  line goes into the result (DV-12).
+  <checkout HEAD>...HEAD`); the binary is a file with 0/0; a fresh branch counts 0; the
+  maintainer's later commit is not counted (1 file, 3 insertions); the implement run's result
+  says 1 file, 3 insertions for the three lines and 1 file, 40 insertions, 40 deletions for the
+  reformat — the change's real size; no path or line goes into the result (DV-12).
 
 ## J6 — Work created in the UI (bundles) · high
 
@@ -517,6 +523,21 @@ Worst impact: an agent that writes or runs outside its worktree.
 - Steps: `trilha-runner drivers`.
 - Expected: `ai`, `claude-code`, `echo`, `exec`, one per line.
 
+**J10.3 `claude-code` reports the model, tokens and cost it used** — U `TestClaudeCodeReportsModelTokensAndCostFromItsJSONResult`,
+`TestClaudeCodeWithoutAJSONResultKeepsTheText`, `TestTheCostTheAgentReportsWinsOverTheEstimate`
+- Resources: sh (a fake `claude` on `PATH`).
+- Preconditions: a claim with the `claude-code` provider and a made-up credential.
+- Data: a JSON result line after a stderr warning — final message holding the credential, 10
+  input, 26,307 cache-write, 5 cache-read and 40 output tokens, `total_cost_usd` 0.03309375,
+  model `claude-haiku-4-5-20251001`; then a `claude` that prints plain text only;
+  `TRILHA_AI_COST_PER_MILLION_TOKENS=1`.
+- Steps: execute the preset driver; build the attempt and the result from its output twice.
+- Expected: argv asks for `--output-format json`; the report is the final message, redacted;
+  model, provider `anthropic`, input 26,322 (cache counted as input), output 40, total 26,362,
+  three turns and cost 0.03309375 USD are reported; the reported cost wins over the per-token
+  estimate in the attempt and adds up across attempts; plain text is kept as the report and
+  no model or cost is invented; without a reported cost the estimate still applies.
+
 ## J11 — Release · low
 
 **J11.1 The binary reports the version that shipped** — U `TestVersionMatchesTheNewestChangelogEntry`
@@ -673,16 +694,37 @@ I `TestAgentQuestionWithASecretIsRedacted`
 **J13.9 A real model follows the protocol (opt-in)** — E `TestLiveOllamaAsksAndTheAnswerContinues`,
 `TestLiveClaudeCodeAsksAndResumesTheSession`
 - Resources: compiled binary; Ollama on `localhost:11434` (`TRILHA_E2E_OLLAMA=1`, model
-  `TRILHA_E2E_OLLAMA_MODEL`, default `qwen2.5:7b`) or Claude Code logged in
-  (`TRILHA_E2E_CLAUDE=1`, `TRILHA_E2E_CLAUDE_MODEL`, default `haiku`; costs money). Skipped,
-  saying how to enable them, otherwise — never in CI.
+  `TRILHA_E2E_OLLAMA_MODEL`, default `qwen2.5:7b`; `make e2e-ollama`) or Claude Code with an
+  API key from the keychain (`make claude-key` once, then `make e2e-claude`; or a local Claude
+  Code login with `TRILHA_E2E_CLAUDE=1`; `TRILHA_E2E_CLAUDE_MODEL`, default `haiku`; costs
+  money). Skipped, saying how to enable them, otherwise — never in CI.
 - Preconditions: a synthetic repository whose task cannot be done without knowing the
   customer's greeting.
 - Data: the answer `Bom dia, cliente!`.
 - Steps: run the worker; answer the question in a continuation.
 - Expected: the first run ends `needs_input` with a non-empty question; the continuation
   writes `GREETING.txt` and its check passes; up to three tries, each logged, because small
-  models are not deterministic.
+  models are not deterministic. With an API key, no file the runs leave in the repository
+  (worktree, agent log, outbox, evidence, settings) and nothing the control plane received
+  contains it.
+
+**J13.10 The live tests' API key stays in the keychain and never leaks** — U `TestKeyLeakGuardFindsTheKeyInFilesAndInWhatTheCloudReceived`,
+I `TestAnthropicKeyStoresChecksRunsAndForgets`, `TestAnthropicKeyRefusesWhatTheAPIRefusesAndWhatIsNotAKey`,
+`TestAnthropicKeyNeverPassesTheKeyAsAnArgument`
+- Resources: bash, httptest (a fake Anthropic API that accepts one synthetic key), a temporary
+  config directory (the script's file store, `ANTHROPIC_KEY_BACKEND=file`).
+- Preconditions: no key stored.
+- Data: a synthetic key marked FAKE; a variant the fake API answers 401; an empty value,
+  `hunter2`, a too-short key and a key followed by a shell command.
+- Steps: `scripts/anthropic-key.sh set` from stdin, `status`, `exec -- CMD`, the key file made
+  readable by others, `forget`; the leak guard over a clean run, then over a log line and a
+  progress message holding the key.
+- Expected: the key is stored only after the API accepts it, mode 0600, and printed only masked
+  (`sk-ant-…` and the last four); `exec` hands it to that one process's environment; a file
+  readable by others is refused; after `forget` the file is gone and `exec` says to run
+  `make claude-key`; a refused or malformed key stores nothing; no line of the script passes
+  the key to `curl`, `security` or `secret-tool` as an argument; the guard reports both leaks
+  and nothing for a clean run.
 
 ## J14 — Review, hunt, variants and review comments · high
 
@@ -829,6 +871,20 @@ I `TestAIDriverReportsFindingsVerdictRepliesAndArtifacts`
 - Expected: the run is `done` at the branch's tip, the branch does not move, nothing is refused
   by policy, and at least one finding is valid and names a file of the branch; up to three
   tries, each logged, because small models are not deterministic.
+
+**J14.12 The agent is told to keep the change small, and the review checks it** — I `TestImplementPromptAsksForTheSmallestChange`
+- Resources: git, sh.
+- Preconditions: a `ready` task; TASK-001 in `review` with its branch.
+- Data: an implement run; a review in report mode, one in fix mode, a hunt with seed 3.
+- Steps: run each and read the prompt the agent received.
+- Expected: the implement prompt has "Keep the change small": the smallest change that meets the
+  acceptance criteria and passes the checks, no refactor, rename, reformat or file the task does
+  not need, no new abstraction or dependency unless asked, `trilha-runner note` to explain a
+  larger change and `trilha-runner ask` before changing scope — and not the review's check. Both
+  reviews have "4. Proportion": every change the task does not need is a `medium` finding titled
+  `Unneeded change:` with path and lines, and a diff much larger than the task needs gets the
+  verdict `changes`. Neither reviews nor the hunt get the implement section; the hunt gets
+  neither.
 
 ## J15 — Worktree operations and foreign code · high
 

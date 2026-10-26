@@ -2,6 +2,45 @@
 
 This project follows semantic versioning.
 
+## 0.7.0 — 2026-10-26
+
+Proportional changes: a reviewer should not get 400 lines of AI changes for something 5 lines
+would fix.
+
+### Added
+
+- **Every implement run is told to keep the change small.** The prompt gets a "Keep the change
+  small" section: the smallest change that meets the acceptance criteria and passes the checks;
+  no refactoring, renaming, reformatting or files the task does not need; no new abstraction or
+  dependency unless the task asks; a larger change is explained with `trilha-runner note`, or
+  asked first with `trilha-runner ask` when it changes the task's scope. Reviews and hunts do not
+  get it.
+- **The AI review checks proportion.** A review compares the diff since the merge base with what
+  the task asks and reports every change the task does not need (refactors, renames,
+  reformatting, new abstractions or dependencies, unrelated files, dead code) as a `medium`
+  finding titled `Unneeded change: …` with its path and lines; a diff much larger than the task
+  needs gets the verdict `changes`.
+- Tests prove `diff_stats` counts the task branch's real size against the commit it was cut from:
+  a three-line addition is 3 lines, a reformat of a 40-line file is 40 in and 40 out, and what
+  the maintainer commits on the checkout afterwards is not counted.
+- `make claude-key`, `make claude-key-status`, `make claude-key-forget` and `make e2e-claude`
+  (`scripts/anthropic-key.sh`): the Anthropic API key for the opt-in live Claude case lives in
+  the macOS Keychain, the Linux Secret Service or a 0600 file, is checked with the API before
+  it is stored, never goes on a command line and reaches only the test process. `make e2e-ollama`
+  runs the Ollama live cases.
+- The live Claude case uses `ANTHROPIC_API_KEY` when it is set, handed to the agent through the
+  run's AI config like a control plane's credential, and fails when the key appears in any file
+  the runs leave in the repository or anything the control plane received.
+
+### Fixed
+
+- **`claude-code` runs reach the control plane with their model, tokens and cost.** The preset
+  asks Claude Code for `--output-format json` and reads its result line: the final message is
+  the report, the model it resolved, input tokens (cache writes and reads included), output
+  tokens and `total_cost_usd`. The reported cost wins over the per-token estimate. Before,
+  every `claude-code` run showed no model, tokens or cost. An older Claude Code that prints
+  plain text keeps working, with nothing invented.
+
 ## 0.6.0 — 2026-10-25
 
 Protocol 0.4 (trilha-spec v0.4.0, spec 016) on the runner side: phase A of the dev-3.0 plan

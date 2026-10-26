@@ -1,6 +1,6 @@
-.PHONY: ci test race flaky e2e host report cover vet fmt build conformance
+.PHONY: ci test race flaky e2e e2e-claude e2e-ollama claude-key claude-key-status claude-key-forget host report cover vet fmt build conformance
 
-PKGS_DIRS = runner driver worktree queue sandbox deployer syncer internal cmd
+PKGS_DIRS = runner driver worktree queue sandbox deployer syncer internal cmd scripts
 
 # What CI runs. See docs/testing.md.
 ci: test race
@@ -17,6 +17,24 @@ flaky:
 
 e2e:
 	go test -count=1 ./cmd/trilha-runner
+
+# Live tests against a real model; opt-in, never in CI. The Anthropic key
+# lives in the system keychain (claude-key) and reaches only the test
+# process; TRILHA_E2E_TRIES=1 spends less, TRILHA_E2E_CLAUDE_MODEL picks the model.
+claude-key:
+	@./scripts/anthropic-key.sh set
+
+claude-key-status:
+	@./scripts/anthropic-key.sh status
+
+claude-key-forget:
+	@./scripts/anthropic-key.sh forget
+
+e2e-claude:
+	@./scripts/anthropic-key.sh exec -- env TRILHA_E2E_CLAUDE=1 go test -count=1 -run 'TestLiveClaudeCode' -v ./cmd/trilha-runner
+
+e2e-ollama:
+	TRILHA_E2E_OLLAMA=1 go test -count=1 -run 'TestLiveOllama' -v ./cmd/trilha-runner
 
 # The binary end to end and the packages that drive real git: what the
 # macOS CI job runs, since maintainers run the runner on macOS.
