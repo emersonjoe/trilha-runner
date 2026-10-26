@@ -327,14 +327,22 @@ que o cloud não lê.
   limpam a outbox, o 404 é posto de lado como `result.rejected.json` em vez de repetido para
   sempre (RM-012).
 
-**J5.12 O resultado conta o que mudou, nunca o conteúdo** — I `TestNumStatCountsWhatTheBranchChanged`
-- Recursos: git.
-- Pré-condições: a worktree de uma task com dois commits.
-- Dados: um arquivo editado (+2 −1), um arquivo de texto novo (+2), um arquivo binário.
-- Passos: contar o branch contra o HEAD do checkout.
+**J5.12 O resultado conta o que mudou, nunca o conteúdo** — I `TestNumStatCountsWhatTheBranchChanged`,
+`TestNumStatIgnoresWhatTheCheckoutGainedAfterTheCut`, `TestDiffStatsCountWhatTheTaskBranchChanged`
+- Recursos: git, sh.
+- Pré-condições: a worktree de uma task com dois commits; uma task cujo branch ganhou três
+  linhas, depois do que o mantenedor fez commit de um arquivo de 50 linhas no checkout; um
+  repositório com um `steps.go` de 40 linhas e uma task `ready`.
+- Dados: um arquivo editado (+2 −1), um arquivo de texto novo (+2), um arquivo binário; uma run
+  de implementação que acrescenta três linhas ao `README.md`, e uma que indenta todas as linhas
+  de `steps.go`.
+- Passos: contar o branch contra o HEAD do checkout; rodar cada run de implementação.
 - Esperado: `diff_stats` de 3 arquivos, 4 inserções, 1 remoção (`git diff --numstat
-  <HEAD do checkout>...HEAD`); o binário é um arquivo com 0/0; um branch novo conta 0; nenhum
-  caminho ou linha vai para o resultado (DV-12).
+  <HEAD do checkout>...HEAD`); o binário é um arquivo com 0/0; um branch novo conta 0; o commit
+  posterior do mantenedor não conta (1 arquivo, 3 inserções); o resultado da run de
+  implementação diz 1 arquivo, 3 inserções para as três linhas e 1 arquivo, 40 inserções, 40
+  remoções para a reformatação — o tamanho real da mudança; nenhum caminho ou linha vai para o
+  resultado (DV-12).
 
 ## J6 — Trabalho criado na UI (bundles) · alta
 
@@ -877,6 +885,21 @@ I `TestAIDriverReportsFindingsVerdictRepliesAndArtifacts`
 - Esperado: a run fica `done` na ponta do branch, o branch não se move, nada é recusado por
   política, e pelo menos um achado é válido e cita um arquivo do branch; até três tentativas,
   cada uma registrada, porque modelos pequenos não são determinísticos.
+
+**J14.12 O agente recebe a ordem de manter a mudança pequena, e a revisão confere** — I `TestImplementPromptAsksForTheSmallestChange`
+- Recursos: git, sh.
+- Pré-condições: uma task `ready`; TASK-001 em `review` com seu branch.
+- Dados: uma run de implementação; uma revisão em modo report, uma em modo fix, uma caça com
+  seed 3.
+- Passos: rodar cada uma e ler o prompt que o agente recebeu.
+- Esperado: o prompt de implementação tem "Keep the change small": a menor mudança que atende aos
+  critérios de aceite e passa nos checks, nada de refatorar, renomear, reformatar ou mexer em
+  arquivo de que a task não precisa, nenhuma abstração ou dependência nova sem pedido,
+  `trilha-runner note` para explicar uma mudança maior e `trilha-runner ask` antes de mudar o
+  escopo — e não a verificação da revisão. As duas revisões têm "4. Proportion": cada mudança de
+  que a task não precisa é um achado `medium` com título `Unneeded change:`, caminho e linhas, e
+  um diff muito maior do que a task precisa recebe o veredito `changes`. Nem as revisões nem a
+  caça recebem a seção de implementação; a caça não recebe nenhuma das duas.
 
 ## J15 — Operações de worktree e código de fork · alta
 

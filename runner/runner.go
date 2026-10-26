@@ -368,7 +368,7 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 			fresh += agentSections(memory, nil)
 		}
 	default:
-		fresh = pack.Markdown() + reviewsBlock(wt.Path, work.ReviewComments) + agentSections(memory, r.Continuation)
+		fresh = pack.Markdown() + reviewsBlock(wt.Path, work.ReviewComments) + smallChangeParagraph + agentSections(memory, r.Continuation)
 	}
 	// The same claude-code conversation resumes with the answer alone; any
 	// other session — another driver, a corrective attempt, a resume that

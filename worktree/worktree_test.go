@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/emersonjoe/trilha-spec/execution"
 	"github.com/emersonjoe/trilha-spec/spec"
 )
 
@@ -205,5 +206,31 @@ func TestNumStatCountsWhatTheBranchChanged(t *testing.T) {
 	}
 	if stats.Files != 3 || stats.Insertions != 4 || stats.Deletions != 1 {
 		t.Fatalf("stats = %+v, want 3 files, 4 insertions, 1 deletion", stats)
+	}
+}
+
+// Proportional changes: what the maintainer commits on the checkout after the
+// task's branch was cut is not the task's change — the count stays the
+// branch's own 3 lines against the commit it left from.
+func TestNumStatIgnoresWhatTheCheckoutGainedAfterTheCut(t *testing.T) {
+	ctx := context.Background()
+	m := repo(t)
+	w, err := m.Create(ctx, "TASK-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(w.Path, "README.md"), []byte("demo\none\ntwo\nthree\n"), 0o644)
+	if _, err := m.Commit(ctx, w, "three lines"); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(m.Layout.Root, "CHANGELOG.md"), []byte(strings.Repeat("entry\n", 50)), 0o644)
+	git(t, m.Layout.Root, "add", "CHANGELOG.md")
+	git(t, m.Layout.Root, "commit", "-q", "-m", "the maintainer's own work")
+	stats, err := m.NumStat(ctx, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats != (execution.DiffStats{Files: 1, Insertions: 3}) {
+		t.Fatalf("stats = %+v, want 1 file, 3 insertions", stats)
 	}
 }

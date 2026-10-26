@@ -322,14 +322,20 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
   is cleared; at start every leftover result is sent before the first claim, 2xx and 409 clear
   the outbox, the 404 is set aside as `result.rejected.json` instead of retried forever (RM-012).
 
-**J5.12 The result counts what changed, never what it is** — I `TestNumStatCountsWhatTheBranchChanged`
-- Resources: git.
-- Preconditions: a task's worktree with two commits.
-- Data: a file edited (+2 −1), a new text file (+2), a binary file.
-- Steps: count the branch against the checkout's HEAD.
+**J5.12 The result counts what changed, never what it is** — I `TestNumStatCountsWhatTheBranchChanged`,
+`TestNumStatIgnoresWhatTheCheckoutGainedAfterTheCut`, `TestDiffStatsCountWhatTheTaskBranchChanged`
+- Resources: git, sh.
+- Preconditions: a task's worktree with two commits; a task whose branch got three lines, after
+  which the maintainer committed a 50-line file on the checkout; a repository with a 40-line
+  `steps.go` and a `ready` task.
+- Data: a file edited (+2 −1), a new text file (+2), a binary file; an implement run that adds
+  three lines to `README.md`, and one that indents every line of `steps.go`.
+- Steps: count the branch against the checkout's HEAD; run each implement run.
 - Expected: `diff_stats` of 3 files, 4 insertions, 1 deletion (`git diff --numstat
-  <checkout HEAD>...HEAD`); the binary is a file with 0/0; a fresh branch counts 0; no path or
-  line goes into the result (DV-12).
+  <checkout HEAD>...HEAD`); the binary is a file with 0/0; a fresh branch counts 0; the
+  maintainer's later commit is not counted (1 file, 3 insertions); the implement run's result
+  says 1 file, 3 insertions for the three lines and 1 file, 40 insertions, 40 deletions for the
+  reformat — the change's real size; no path or line goes into the result (DV-12).
 
 ## J6 — Work created in the UI (bundles) · high
 
@@ -865,6 +871,20 @@ I `TestAIDriverReportsFindingsVerdictRepliesAndArtifacts`
 - Expected: the run is `done` at the branch's tip, the branch does not move, nothing is refused
   by policy, and at least one finding is valid and names a file of the branch; up to three
   tries, each logged, because small models are not deterministic.
+
+**J14.12 The agent is told to keep the change small, and the review checks it** — I `TestImplementPromptAsksForTheSmallestChange`
+- Resources: git, sh.
+- Preconditions: a `ready` task; TASK-001 in `review` with its branch.
+- Data: an implement run; a review in report mode, one in fix mode, a hunt with seed 3.
+- Steps: run each and read the prompt the agent received.
+- Expected: the implement prompt has "Keep the change small": the smallest change that meets the
+  acceptance criteria and passes the checks, no refactor, rename, reformat or file the task does
+  not need, no new abstraction or dependency unless asked, `trilha-runner note` to explain a
+  larger change and `trilha-runner ask` before changing scope — and not the review's check. Both
+  reviews have "4. Proportion": every change the task does not need is a `medium` finding titled
+  `Unneeded change:` with path and lines, and a diff much larger than the task needs gets the
+  verdict `changes`. Neither reviews nor the hunt get the implement section; the hunt gets
+  neither.
 
 ## J15 — Worktree operations and foreign code · high
 
