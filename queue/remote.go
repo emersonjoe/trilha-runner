@@ -275,3 +275,46 @@ func (r Remote) DoneDeployment(ctx context.Context, work DeploymentWork, result 
 	}
 	return nil
 }
+
+// ErrArtifactsDisabled is a control plane saying the project does not accept
+// artifacts (403 with code ARTIFACTS_DISABLED): the runner drops every
+// artifact of the run from its result and does not try again.
+var ErrArtifactsDisabled = errors.New("queue: the project does not accept artifacts")
+
+// UploadArtifact sends one report before the run's result:
+//
+//	PUT /api/runs/{id}/artifacts/{name}   body: the bytes
+//	Content-Type: text/html | text/markdown | image/png | image/jpeg
+//	X-Artifact-SHA256: <hex>
+//
+// 201 is accepted. A 403 whose JSON code is ARTIFACTS_DISABLED answers
+// ErrArtifactsDisabled; any other non-2xx is a *StatusError (413 too large,
+// 422 invalid). The caller never retries a 4xx.
+func (r Remote) UploadArtifact(ctx context.Context, item Item, name, contentType, sha256 string, data []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, r.BaseURL+"/api/runs/"+url.PathEscape(item.ID)+"/artifacts/"+url.PathEscape(name), bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+r.Token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Artifact-SHA256", sha256)
+	resp, err := r.client().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 == 2 {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode == http.StatusForbidden {
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal(body, &refusal) == nil && refusal.Code == "ARTIFACTS_DISABLED" {
+			return ErrArtifactsDisabled
+		}
+	}
+	return &StatusError{Code: resp.StatusCode, Status: resp.Status, Body: string(bytes.TrimSpace(body))}
+}

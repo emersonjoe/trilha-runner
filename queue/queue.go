@@ -31,14 +31,28 @@ type Item struct {
 	// control plane returns the item for observability without claiming it.
 	Waiting string `json:"waiting,omitempty"`
 	// Protocol 0.4, with the names of execution.Run. Kind is what the run is
-	// for ("" or implement today; review and hunt come later and are refused
-	// by nobody here yet). Continuation carries an operator's answer to the
-	// question a needs_input run asked; Context is the task's memory, which
-	// reaches the agent quoted, never as instructions. Fields this runner
-	// does not know yet (review_of, hunt_seed, variant_*) are ignored.
-	Kind         execution.Kind          `json:"kind,omitempty"`
-	Continuation *execution.Continuation `json:"continuation,omitempty"`
-	Context      *execution.TaskContext  `json:"context,omitempty"`
+	// for: implement ("" too), review (of the branch of the run ReviewOf,
+	// read-only in ReviewMode report, allowed to commit in fix) or hunt
+	// (read-only, pointed at an area and a style by HuntSeed). A variant
+	// (VariantIndex ≥ 1) works on its own branch, trilha/task-nnn-v<N>.
+	// ReviewComments are people's review comments for a repair run: anchors
+	// and words, never code. Continuation carries an operator's answer to
+	// the question a needs_input run asked; Context is the task's memory,
+	// which reaches the agent quoted, never as instructions.
+	Kind           execution.Kind            `json:"kind,omitempty"`
+	ReviewOf       string                    `json:"review_of,omitempty"`
+	ReviewMode     execution.ReviewMode      `json:"review_mode,omitempty"`
+	HuntSeed       *execution.HuntSeed       `json:"hunt_seed,omitempty"`
+	VariantGroup   string                    `json:"variant_group,omitempty"`
+	VariantIndex   int                       `json:"variant_index,omitempty"`
+	ReviewComments []execution.ReviewComment `json:"review_comments,omitempty"`
+	Continuation   *execution.Continuation   `json:"continuation,omitempty"`
+	Context        *execution.TaskContext    `json:"context,omitempty"`
+	// ForeignCode is the queue's word that the branch head comes from a
+	// fork. It is not part of the execution contract: the runner then hands
+	// the agent and the checks no secret, requires the Docker sandbox and
+	// takes project.verify from the default branch.
+	ForeignCode bool `json:"foreign_code,omitempty"`
 }
 
 // AI is the project-scoped provider configuration disclosed only with a
@@ -142,6 +156,14 @@ type Result struct {
 	Overview  string               `json:"overview,omitempty"`
 	Notes     []execution.Note     `json:"notes,omitempty"`
 	DiffStats *execution.DiffStats `json:"diff_stats,omitempty"`
+	// Review is the verdict of a review run; Findings what a hunt run
+	// proved; ReviewReplies the agent's answer to each review comment of the
+	// claim; Artifacts the reports the control plane accepted (uploaded
+	// before this result). Anchors and metadata only, never code.
+	Review        *execution.ReviewVerdict `json:"review,omitempty"`
+	Findings      []execution.Finding      `json:"findings,omitempty"`
+	ReviewReplies []execution.ReviewReply  `json:"review_replies,omitempty"`
+	Artifacts     []execution.Artifact     `json:"artifacts,omitempty"`
 }
 
 func (result Result) MarshalJSON() ([]byte, error) {

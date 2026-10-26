@@ -683,3 +683,34 @@ I `TestAgentQuestionWithASecretIsRedacted`
 - Expected: the first run ends `needs_input` with a non-empty question; the continuation
   writes `GREETING.txt` and its check passes; up to three tries, each logged, because small
   models are not deterministic.
+
+## J14 — Review, hunt, variants and review comments · high
+
+*The control plane asks for a second opinion on a branch: an AI review that reports (or fixes,
+when the project allows it), read-only bug hunters pointed at different areas, several variants
+of the same task on separate branches, or a repair run that answers people's review comments.
+The runner turns each into a branch, findings, a verdict, replies and reports, and proves the
+read-only runs changed nothing.*
+Worst impact: a "read-only" reviewer quietly commits to the branch a person is about to merge;
+a variant adopts or deletes a branch someone else made; a review comment from GitHub smuggles
+instructions into the agent; a report carries a secret to the cloud.
+
+**J14.1 The claim and the result speak protocol 0.4** — I `TestClaimAndResultCarryReviewHuntVariantAndArtifacts`
+- Resources: none.
+- Preconditions: a claim JSON with every 0.4 field the cloud sends.
+- Data: `kind: hunt`, `review_of`, `review_mode: report`, `hunt_seed {7, error paths, trace
+  follower}`, `variant_group`, `variant_index: 2`, one `review_comments` entry, `foreign_code:
+  true`; a result with `review`, `findings`, `review_replies`, `artifacts`.
+- Steps: decode the claim into `queue.Item`; encode the result.
+- Expected: nothing is lost on the way in; the result carries `review.verdict`, `findings`,
+  `review_replies` and `artifacts` under the names of `execution.Outcome`.
+
+**J14.2 An artifact is uploaded before the result** — I `TestUploadArtifactSendsBytesTypeAndDigest`
+- Resources: httptest.
+- Preconditions: a cloud that accepts one name, disables artifacts for another and refuses the
+  rest with 413, 422 and a plain 403.
+- Data: `report.md` with `# Report`.
+- Steps: `PUT /api/runs/{id}/artifacts/{name}` for each.
+- Expected: the body is the raw bytes, `Content-Type` and `X-Artifact-SHA256` are set, the
+  bearer key goes along; 403 `ARTIFACTS_DISABLED` is `ErrArtifactsDisabled`; 413, 422 and other
+  403s are `StatusError`s that are not retryable.

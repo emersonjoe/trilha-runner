@@ -692,3 +692,34 @@ I `TestAgentQuestionWithASecretIsRedacted`
 - Esperado: a primeira run termina `needs_input` com uma pergunta não vazia; a continuação
   escreve `GREETING.txt` e o check passa; até três tentativas, cada uma registrada, porque
   modelos pequenos não são determinísticos.
+
+## J14 — Revisão, caça, variantes e comentários de revisão · alta
+
+*O control plane pede uma segunda opinião sobre um branch: uma revisão por IA que relata (ou
+corrige, quando o projeto permite), caçadores de bugs só-leitura apontados para áreas
+diferentes, várias variantes da mesma task em branches separados, ou uma run de correção que
+responde aos comentários de revisão das pessoas. O runner transforma cada uma em branch,
+achados, veredito, respostas e relatórios, e prova que as runs só-leitura não mudaram nada.*
+Pior impacto: um revisor "só-leitura" faz commit em silêncio no branch que uma pessoa vai
+mesclar; uma variante adota ou apaga um branch que outra pessoa criou; um comentário de revisão
+do GitHub contrabandeia instruções para o agente; um relatório leva um segredo ao cloud.
+
+**J14.1 A reivindicação e o resultado falam o protocolo 0.4** — I `TestClaimAndResultCarryReviewHuntVariantAndArtifacts`
+- Recursos: nenhum.
+- Pré-condições: um JSON de reivindicação com todos os campos 0.4 que o cloud manda.
+- Dados: `kind: hunt`, `review_of`, `review_mode: report`, `hunt_seed {7, error paths, trace
+  follower}`, `variant_group`, `variant_index: 2`, um item em `review_comments`, `foreign_code:
+  true`; um resultado com `review`, `findings`, `review_replies`, `artifacts`.
+- Passos: decodificar a reivindicação em `queue.Item`; codificar o resultado.
+- Esperado: nada se perde na entrada; o resultado leva `review.verdict`, `findings`,
+  `review_replies` e `artifacts` com os nomes de `execution.Outcome`.
+
+**J14.2 Um artefato sobe antes do resultado** — I `TestUploadArtifactSendsBytesTypeAndDigest`
+- Recursos: httptest.
+- Pré-condições: um cloud que aceita um nome, desliga artefatos para outro e recusa o resto com
+  413, 422 e um 403 comum.
+- Dados: `report.md` com `# Report`.
+- Passos: `PUT /api/runs/{id}/artifacts/{name}` para cada um.
+- Esperado: o corpo são os bytes crus, `Content-Type` e `X-Artifact-SHA256` vão preenchidos, a
+  chave bearer vai junto; 403 `ARTIFACTS_DISABLED` é `ErrArtifactsDisabled`; 413, 422 e outros
+  403 são `StatusError` não repetíveis.
