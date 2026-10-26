@@ -58,8 +58,8 @@ O manifesto do agente (`.trilha/agents/<nome>.md`) nomeia um driver; `--driver` 
 | Driver | O que faz |
 |---|---|
 | `exec` | inicia um agente de linha de comando (`claude -p -`, `codex exec -`, `aider --message-file -`…) com o pacote de contexto no stdin, dentro do worktree; `TRILHA_TASK` e `TRILHA_WORKTREE` vão no ambiente |
-| `claude-code` | preset fixo `claude -p -`; um item remoto pode injetar apenas `CLAUDE_CODE_OAUTH_TOKEN` ou `ANTHROPIC_API_KEY`, e o valor é censurado da saída capturada |
-| `ai` | roda o loop de agente do [`trilha/ai`](https://github.com/emersonjoe/trilha/tree/main/ai) em qualquer modelo com protocolo OpenAI, com `read_file`, `list_files` e — só quando o manifesto lista `write` / `run` — `write_file` e `run`, tudo restrito ao worktree; com `trilha-spec` no PATH o modelo recebe também as ferramentas MCP só-leitura do protocolo |
+| `claude-code` | preset fixo `claude -p -`; um item remoto pode injetar apenas `CLAUDE_CODE_OAUTH_TOKEN` ou `ANTHROPIC_API_KEY`, e o valor é censurado da saída capturada. O runner acrescenta `--session-id <uuid>` (ou `--resume <uuid>` para continuar uma sessão que fez uma pergunta) e `--settings .trilha/runs/TASK-NNN/claude-settings.json` — hooks que reportam o estado do agente, escritos ao lado do worktree, nunca dentro dele |
+| `ai` | roda o loop de agente do [`trilha/ai`](https://github.com/emersonjoe/trilha/tree/main/ai) em qualquer modelo com protocolo OpenAI, com `read_file`, `list_files` e — só quando o manifesto lista `write` / `run` — `write_file` e `run`, tudo restrito ao worktree; mais `ask`, `note` e `overview`; com `trilha-spec` no PATH o modelo recebe também as ferramentas MCP só-leitura do protocolo |
 | `echo` | sem modelo; escreve a primeira linha do prompt num arquivo. É o que os testes usam |
 
 Seja qual for o driver, a cerca é a mesma: o worktree, as ferramentas do manifesto e os checks.
@@ -89,6 +89,38 @@ na hora com `failure_class: environment`, `error_code: environment_missing_tool`
 citando a ferramenta e o check, e nenhuma chamada ao driver. Um check que sai com 127 em tempo de
 execução, ou um comando de agente que não está instalado, recebe a mesma classe e nunca é repetido.
 
+## Quando o agente precisa de alguém (protocolo 0.4)
+
+Durante uma run o runner escuta num socket Unix, `.trilha/runs/TASK-NNN/agent.sock`, e dá ao
+agente `TRILHA_RUN_SOCKET`, `TRILHA_RUN_ID` e um `PATH` onde `trilha-runner` é encontrado. O
+agente pode então rodar:
+
+| Comando | O que acontece |
+|---|---|
+| `trilha-runner ask "<pergunta>"` | quando o agente encerra o turno, a run termina **`needs_input`** com a pergunta: o trabalho até ali é commitado no branch, nenhum check roda, nenhuma tentativa falhou, nada é repetido, e a task fica `blocked` localmente até chegar uma resposta |
+| `trilha-runner note "<texto>"` | uma nota (fonte `ai`) no resultado, para a próxima run da task |
+| `trilha-runner overview "<texto>"` | uma ou duas frases sobre o que está sendo feito e onde está |
+| `trilha-runner attention "<motivo>"` / `--clear` | levanta ou limpa o selo que diz que alguém é necessário, na hora |
+| `trilha-runner hook claude` | o que os hooks do Claude Code chamam, com o JSON do hook na entrada padrão |
+
+Todos saem com 0 em menos de um segundo, mesmo sem ninguém ouvindo: o runner nunca derruba nem
+segura um agente. O pacote de contexto sempre diz ao agente para fazer uma pergunta objetiva e
+parar quando faltar informação. Perguntas, notas, overviews e motivos têm limite de tamanho e
+passam pela varredura de segredos antes de sair: uma pergunta com segredo chega ao cloud como um
+aviso fixo, e as palavras ficam em `.trilha/runs/TASK-NNN/question.txt` (modo 0600).
+
+O estado do agente — `working`, `idle`, `waiting_permission`, `asked`, `stopped_error` — vem dos
+hooks do claude-code (`PreToolUse`, `PostToolUse`, `Stop`, `StopFailure`) ou do próprio loop do
+`ai`, e é reportado como `agent_state` só quando muda, no máximo uma vez a cada 2 s.
+
+A resposta volta como uma run cuja reivindicação traz `continuation`. Quando a pergunta veio de
+uma sessão claude-code, essa mesma sessão é retomada (`--resume`) com a resposta, citada, como
+prompt; senão — outro driver, ou uma sessão que esta máquina não tem mais — uma sessão nova lê a
+pergunta e a resposta, citadas, no pacote de contexto. O `context` da reivindicação (overview e
+notas recentes) também entra citado no pacote, rotulado como informação, nunca instrução. O
+resultado traz `question`, `session`, `overview`, `notes` e `diff_stats` (arquivos, inserções,
+remoções de `git diff --numstat` contra o HEAD do checkout — contagens, nunca conteúdo).
+
 ## Worker: a ponte para o trilha-cloud
 
 ```bash
@@ -107,6 +139,16 @@ runner e `driver_versions`: o que `claude --version` e `codex --version` respond
 resolvido uma vez na subida com timeout de 3 s (`unknown` quando o binário falta ou não
 responde; `echo` e `ai` são o próprio runner). Cada run pode carregar um objeto `ai` transitório com provedor, URL base,
 modelo, credencial e hosts permitidos; a credencial nunca é persistida.
+
+Enquanto houver run ativa o worker manda um heartbeat a cada 30 s (`running n/N`), para que uma
+run longa não o deixe parecendo offline e o cloud possa manter o lease da run. O resultado é
+escrito em `.trilha/runs/<run-id>/result.json` antes de ser enviado e removido quando o cloud o
+tem; um cloud fora do ar é tentado de novo com backoff (até 30 s entre tentativas) em vez de
+parar o worker, e resultados deixados por um worker que morreu são enviados na próxima subida,
+antes de qualquer reivindicação. O cloud guarda um resultado por run e tentativa, então um
+resultado enviado duas vezes continua sendo um. Uma task deixada em `running` por um runner que
+morreu (nenhum processo vivo por trás de `.trilha/runs/TASK-NNN/runner.pid`) volta a `ready` com
+uma nota na próxima vez que for rodada.
 
 Dependências entre repositórios usam `depends_on: alias:TASK-NNN`. A execução local resolve os
 aliases com flags repetíveis `next --repo alias=caminho`. Workers remotos consultam
@@ -178,6 +220,13 @@ nada fora da biblioteca padrão do Go além desses dois módulos.
 sem rede nem chave, com o driver `echo` e repositórios git reais em diretórios temporários.
 Como a suíte se organiza, e as jornadas de usuário que cada teste prova, estão em
 [docs/testing.pt-BR.md](docs/testing.pt-BR.md) e [docs/journeys.pt-BR.md](docs/journeys.pt-BR.md).
+
+Dois casos ao vivo rodam um modelo real e são opcionais, nunca no CI: `TRILHA_E2E_OLLAMA=1`
+conduz o driver `ai` contra o Ollama em `localhost:11434` (`TRILHA_E2E_OLLAMA_MODEL`, padrão
+`qwen2.5:7b`), e `TRILHA_E2E_CLAUDE=1` conduz o `claude-code` com o login local do Claude Code
+(`TRILHA_E2E_CLAUDE_MODEL`, padrão `haiku`; custa dinheiro). Os dois fazem uma pergunta,
+respondem numa continuação e conferem o resultado, com até três tentativas (`TRILHA_E2E_TRIES`
+reduz): `TRILHA_E2E_OLLAMA=1 go test ./cmd/trilha-runner -run TestLive -v`.
 
 ## Licença
 

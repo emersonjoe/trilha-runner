@@ -58,8 +58,8 @@ The agent manifest (`.trilha/agents/<name>.md`) names a driver; `--driver` overr
 | Driver | What it does |
 |---|---|
 | `exec` | starts a command-line agent (`claude -p -`, `codex exec -`, `aider --message-file -`…) with the context pack on stdin, inside the worktree; `TRILHA_TASK` and `TRILHA_WORKTREE` are set |
-| `claude-code` | fixed `claude -p -` preset; a remote item may inject only `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, and the value is redacted from captured output |
-| `ai` | runs the agent loop of [`trilha/ai`](https://github.com/emersonjoe/trilha/tree/main/ai) on any OpenAI-protocol model with `read_file`, `list_files`, and — only when the manifest lists `write` / `run` — `write_file` and `run`, all scoped to the worktree; when `trilha-spec` is in PATH the model also gets the protocol's read-only MCP tools |
+| `claude-code` | fixed `claude -p -` preset; a remote item may inject only `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, and the value is redacted from captured output. The runner adds `--session-id <uuid>` (or `--resume <uuid>` to continue a session that asked a question) and `--settings .trilha/runs/TASK-NNN/claude-settings.json` — hooks that report the agent's state, written beside the worktree, never inside it |
+| `ai` | runs the agent loop of [`trilha/ai`](https://github.com/emersonjoe/trilha/tree/main/ai) on any OpenAI-protocol model with `read_file`, `list_files`, and — only when the manifest lists `write` / `run` — `write_file` and `run`, all scoped to the worktree; plus `ask`, `note` and `overview`; when `trilha-spec` is in PATH the model also gets the protocol's read-only MCP tools |
 | `echo` | no model; writes the prompt's first line to a file. What the tests use |
 
 Whatever the driver, the fence is the same: the worktree, the manifest's tools, and the checks.
@@ -88,6 +88,38 @@ one ends the run at once with `failure_class: environment`, `error_code: environ
 a `run` record naming the tool and the check, and no call to the driver. A check that exits 127
 at run time, or an agent command that is not installed, gets the same class and is never retried.
 
+## When the agent needs a person (protocol 0.4)
+
+During a run the runner listens on a Unix socket, `.trilha/runs/TASK-NNN/agent.sock`, and gives
+the agent `TRILHA_RUN_SOCKET`, `TRILHA_RUN_ID` and a `PATH` where `trilha-runner` is found. The
+agent can then run:
+
+| Command | What happens |
+|---|---|
+| `trilha-runner ask "<question>"` | when the agent ends its turn, the run ends **`needs_input`** with the question: the work so far is committed on the branch, no check runs, no attempt failed, nothing is retried, and the task is `blocked` locally until an answer comes |
+| `trilha-runner note "<text>"` | a note (source `ai`) in the result, for the next run of the task |
+| `trilha-runner overview "<text>"` | one or two sentences on what is being done and where it stands |
+| `trilha-runner attention "<reason>"` / `--clear` | raises or clears the badge that says a person is needed, at once |
+| `trilha-runner hook claude` | what Claude Code's hooks call, with the hook JSON on stdin |
+
+Every one of them exits 0 within a second, even when nobody listens: an agent is never failed or
+held up by the runner. The context pack always tells the agent to ask one objective question and
+stop when information is missing. Questions, notes, overviews and reasons are size-limited and
+secret-scanned before they leave: a question that holds a secret reaches the cloud as a fixed
+notice, and its words stay in `.trilha/runs/TASK-NNN/question.txt` (mode 0600).
+
+The agent's state — `working`, `idle`, `waiting_permission`, `asked`, `stopped_error` — comes
+from claude-code's hooks (`PreToolUse`, `PostToolUse`, `Stop`, `StopFailure`) or from the `ai`
+loop itself, and is reported as `agent_state` only when it changes, at most once every 2 s.
+
+An answer comes back as a run whose claim carries `continuation`. When the question came from a
+claude-code session, that same session resumes (`--resume`) with the answer, quoted, as its
+prompt; otherwise — another driver, or a session this machine no longer has — a fresh session
+reads the question and the answer, quoted, in the context pack. The claim's `context` (overview
+and recent notes) is quoted into the pack too, labelled as information, never instructions. The
+result carries `question`, `session`, `overview`, `notes` and `diff_stats` (files, insertions,
+deletions from `git diff --numstat` against the checkout's HEAD — counts, never content).
+
 ## Worker: the bridge to trilha-cloud
 
 ```bash
@@ -106,6 +138,15 @@ the runner version and `driver_versions`: what `claude --version` and `codex --v
 this worker, resolved once at startup with a 3-second timeout (`unknown` when the binary is
 absent or silent; `echo` and `ai` are the runner itself). Each claimed run may carry a transient `ai` object with
 provider, base URL, model, credential and allowed hosts; the credential is never persisted.
+
+While any run is active the worker sends a heartbeat every 30 s (`running n/N`), so a long run
+does not leave it looking offline and the cloud can keep the run's lease. A result is written to
+`.trilha/runs/<run-id>/result.json` before it is posted and removed once the cloud has it; a
+cloud that is down is retried with backoff (up to 30 s apart) instead of stopping the worker,
+and results left by a worker that died are sent at the next start, before anything is claimed.
+The cloud keeps one result per run and attempt, so a result sent twice is still one. A task left
+`running` by a runner that died (no live process behind `.trilha/runs/TASK-NNN/runner.pid`) goes
+back to `ready` with a note the next time it is run.
 
 Cross-repository dependencies use `depends_on: alias:TASK-NNN`. Local execution resolves aliases
 from repeatable `next --repo alias=path` flags. Remote workers ask
@@ -178,6 +219,13 @@ framework — nothing outside the Go standard library beyond those two modules.
 network and no key, using the `echo` driver and real git repositories in temporary
 directories. How the suite is organized, and the user journeys each test proves, are in
 [docs/testing.md](docs/testing.md) and [docs/journeys.md](docs/journeys.md).
+
+Two live cases run a real model and are opt-in, never in CI: `TRILHA_E2E_OLLAMA=1` drives the
+`ai` driver against Ollama on `localhost:11434` (`TRILHA_E2E_OLLAMA_MODEL`, default
+`qwen2.5:7b`), and `TRILHA_E2E_CLAUDE=1` drives `claude-code` with the local Claude Code login
+(`TRILHA_E2E_CLAUDE_MODEL`, default `haiku`; it costs money). Both ask a question, answer it in a
+continuation and check the result, trying up to three times (`TRILHA_E2E_TRIES` lowers it):
+`TRILHA_E2E_OLLAMA=1 go test ./cmd/trilha-runner -run TestLive -v`.
 
 ## License
 

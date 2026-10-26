@@ -2,6 +2,67 @@
 
 This project follows semantic versioning.
 
+## Unreleased
+
+Protocol 0.4 (trilha-spec spec 016) on the runner side: phase A of the dev-3.0 plan
+(`trilha-cloud/docs/PLANO-DEV3.md`, DV-01 to DV-04 and DV-12) and roadmap RM-012/RM-013.
+
+### Added
+
+- **The agent can ask.** `trilha-runner ask "<question>"`, on the agent's PATH during a run,
+  ends the run `needs_input` with the question when the agent ends its turn: the work so far is
+  committed, no check runs, no attempt failed, nothing is retried, and the task is `blocked`
+  locally. The `ai` driver has an `ask` tool that does the same. The context pack tells every
+  agent to ask one objective question and stop when information is missing.
+- **Answers continue the work.** A claim with `continuation` resumes the same claude-code session
+  (`--resume <session_id>`) with the answer, quoted, as the prompt; any other case starts a fresh
+  session with the question and the answer quoted in the context pack. claude-code sessions are
+  named up front (`--session-id <uuid>`) and the result reports `session`.
+- **Agent state.** `trilha-runner hook claude` turns Claude Code's `PreToolUse`, `PostToolUse`,
+  `Stop` and `StopFailure` hooks — configured in `.trilha/runs/TASK-NNN/claude-settings.json`,
+  beside the worktree and passed with `--settings` — into `agent_state` progress reports
+  (`working`, `idle`, `asked`, `stopped_error`…), sent only on change and at most once every 2 s;
+  the `ai` driver reports the same from its loop. `trilha-runner attention "<reason>"` and
+  `--clear` raise and clear the attention badge. The agent commands talk to the run over a Unix
+  socket (`TRILHA_RUN_SOCKET`, `TRILHA_RUN_ID`) and always exit 0 within a second.
+- **Task memory.** `trilha-runner note` and `trilha-runner overview` (and `note`/`overview` tools
+  in the `ai` driver) put `notes` (source `ai`) and `overview` in the result; the claim's
+  `context` is quoted into the context pack with `execution.QuoteContext`, labelled as
+  information, never instructions.
+- **Diff counts.** Results carry `diff_stats` (files, insertions, deletions) from
+  `git diff --numstat <checkout HEAD>...HEAD`; a binary file counts as a file with 0/0.
+- **Heartbeat during a run.** While any run is active the worker sends `running n/N` every 30 s
+  (RM-013).
+- **Result outbox.** The result is written to `.trilha/runs/<run-id>/result.json` before
+  `POST /result`, retried with backoff instead of stopping the worker, set aside as
+  `result.rejected.json` on a final 4xx, and resent at the next start (RM-012, runner side).
+- Opt-in live tests against a real model: `TRILHA_E2E_OLLAMA=1` and `TRILHA_E2E_CLAUDE=1`.
+
+### Changed
+
+- The wire types follow protocol 0.4 (`github.com/emersonjoe/trilha-spec` at `9cb760d`): the claim
+  decodes `kind`, `continuation` and `context`; progress carries `agent_state` and `attention`;
+  the result carries `question`, `session`, `overview`, `notes`, `diff_stats` and may have status
+  `needs_input`. `make conformance` also compares the `needs_input` fixture.
+- A task left `running` by a runner that died (no live process behind
+  `.trilha/runs/TASK-NNN/runner.pid`) goes back to `ready` with a note instead of blocking forever
+  (RM-012).
+- A failed `POST /result` no longer stops the worker (see the outbox above).
+
+### Fixed
+
+- The agent's environment now carries `USER` and `LOGNAME`: Claude Code on macOS finds a local
+  login in the keychain by user and answered "Not logged in" without them.
+
+### Security
+
+- Questions, notes, overviews and attention reasons are size-limited (the protocol's limits) and
+  secret-scanned before they leave the machine — the run's credential and credential-shaped
+  strings (`sk-`, `ghp_`, `github_pat_`, `xox?-`, `AKIA`, private keys); a question with a secret
+  becomes a fixed notice and its words stay in `question.txt` (mode 0600). The agent socket is
+  owner-only; a session id reaches argv only as a UUID; the claude-code settings allow exactly the
+  agent's own runner commands through Bash.
+
 ## 0.5.0 — 2026-10-25
 
 ### Fixed
