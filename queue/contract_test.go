@@ -5,6 +5,8 @@ import (
 	"os"
 	"reflect"
 	"testing"
+
+	"github.com/emersonjoe/trilha-spec/execution"
 )
 
 // The execution-v1 fixture is trilha-spec's canonical run, byte for byte
@@ -62,6 +64,68 @@ func TestExecutionV1FixtureMatchesRemoteResult(t *testing.T) {
 	for _, key := range []string{"provider", "tokens_in", "tokens_out", "cost", "currency"} {
 		if _, ok := wire.Attempts[1][key]; !ok {
 			t.Errorf("attempt 2 on the wire has no %q: %v", key, wire.Attempts[1])
+		}
+	}
+}
+
+// The protocol 0.4 fixture: a run that stopped to ask. The claim side of it
+// (kind, context) decodes into Item and the result side (question, session,
+// overview, notes, diff_stats) into Result, and nothing is lost on the way
+// back out — this is the shape the worker sends and the cloud stores.
+func TestExecutionV1NeedsInputFixtureDecodes(t *testing.T) {
+	data, err := os.ReadFile("../testdata/contracts/execution-v1-needs-input.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claim Item
+	if err := json.Unmarshal(data, &claim); err != nil {
+		t.Fatal(err)
+	}
+	if claim.ID != "run-000007" || claim.TaskID != "TASK-002" || claim.Kind != "implement" {
+		t.Fatalf("claim = %+v", claim)
+	}
+	if claim.Context == nil || claim.Context.Overview == "" || len(claim.Context.Notes) != 1 || claim.Context.Notes[0].Source != "operator" {
+		t.Fatalf("context = %+v", claim.Context)
+	}
+	var run struct {
+		Status string `json:"status"`
+		Result Result `json:"result"`
+	}
+	if err := json.Unmarshal(data, &run); err != nil {
+		t.Fatal(err)
+	}
+	result := run.Result
+	if run.Status != "needs_input" || result.Status != "needs_input" || result.Passed {
+		t.Fatalf("status = %q / %+v", run.Status, result)
+	}
+	if result.Question == nil || result.Question.Text == "" || result.Question.AskedAt.IsZero() {
+		t.Fatalf("question = %+v", result.Question)
+	}
+	if result.Session == nil || result.Session.Driver != "claude-code" || result.Session.SessionID == "" {
+		t.Fatalf("session = %+v", result.Session)
+	}
+	if result.Overview == "" || len(result.Notes) != 1 || result.Notes[0].Source != "ai" {
+		t.Fatalf("memory = %q %+v", result.Overview, result.Notes)
+	}
+	if result.DiffStats == nil || *result.DiffStats != (execution.DiffStats{Files: 3, Insertions: 42, Deletions: 5}) {
+		t.Fatalf("diff_stats = %+v", result.DiffStats)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var again Result
+	if err := json.Unmarshal(encoded, &again); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result, again) {
+		t.Fatalf("round trip changed the result:\n%+v\n%+v", result, again)
+	}
+	var wire map[string]any
+	_ = json.Unmarshal(encoded, &wire)
+	for _, key := range []string{"question", "session", "overview", "notes", "diff_stats"} {
+		if _, ok := wire[key]; !ok {
+			t.Errorf("result on the wire has no %q", key)
 		}
 	}
 }

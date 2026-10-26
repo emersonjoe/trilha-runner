@@ -1,0 +1,13 @@
+{
+  "task": "TASK-026",
+  "seq": 1,
+  "kind": "check",
+  "at": "2026-10-26T01:11:45Z",
+  "by": "trilha-spec verify",
+  "command": "go test ./runner -run TestReviewCommentsAreQuotedFromTheWorktreeAndAnswered -count=1",
+  "dir": "/Users/emersonoliveiradossantos/Projetos/github/trilha-runner",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/runner\t0.570s\n",
+  "output_sha256": "7223247b69e24a86abea733f3902d2974995e23361f196446cbea6ac73ff0246",
+  "passed": true
+}

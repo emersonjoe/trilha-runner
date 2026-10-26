@@ -13,9 +13,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/emersonjoe/trilha-spec/execution"
 	"github.com/emersonjoe/trilha-spec/spec"
 )
 
@@ -27,6 +30,14 @@ type Worktree struct {
 	Task   string `json:"task"`
 	Path   string `json:"path"`
 	Branch string `json:"branch"`
+	// Key names the run's directory under runs/: the task id, or the task
+	// id and a suffix for a variant or a read-only run. "" means Task.
+	Key string `json:"key,omitempty"`
+	// Detached is a read-only run's checkout of a branch's tip; Ref is the
+	// ref it was taken from and Head the commit it started at.
+	Detached bool   `json:"detached,omitempty"`
+	Ref      string `json:"ref,omitempty"`
+	Head     string `json:"head,omitempty"`
 }
 
 // Branch answers the branch name of a task.
@@ -36,21 +47,10 @@ func Branch(taskID string) string { return "trilha/" + strings.ToLower(taskID) }
 func (m Manager) Path(taskID string) string { return filepath.Join(m.Layout.Runs(), taskID, "wt") }
 
 // Create checks out the task's branch in its worktree, creating the branch
-// from HEAD when it does not exist and reusing the worktree when it does.
+// from HEAD when it does not exist (and proving it created it) and reusing
+// the worktree when it does.
 func (m Manager) Create(ctx context.Context, taskID string) (Worktree, error) {
-	w := Worktree{Task: taskID, Path: m.Path(taskID), Branch: Branch(taskID)}
-	if _, err := os.Stat(filepath.Join(w.Path, ".git")); err == nil {
-		return w, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(w.Path), 0o755); err != nil {
-		return w, err
-	}
-	if _, err := m.git(ctx, m.Layout.Root, "rev-parse", "--verify", "--quiet", w.Branch); err == nil {
-		_, err = m.git(ctx, m.Layout.Root, "worktree", "add", w.Path, w.Branch)
-		return w, err
-	}
-	_, err := m.git(ctx, m.Layout.Root, "worktree", "add", "-b", w.Branch, w.Path, "HEAD")
-	return w, err
+	return m.Open(ctx, Target{Task: taskID})
 }
 
 // Remove drops the worktree, keeping the branch.
@@ -77,11 +77,34 @@ func (m Manager) List() ([]Worktree, error) {
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(m.Path(e.Name()), ".git")); err == nil {
-			out = append(out, Worktree{Task: e.Name(), Path: m.Path(e.Name()), Branch: Branch(e.Name())})
+			out = append(out, m.describe(e.Name()))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Task < out[j].Task })
 	return out, nil
+}
+
+// describe answers what is known of a run directory's worktree without
+// running git: the task its key starts with and the branch its proof file
+// names, else the task's branch.
+func (m Manager) describe(key string) Worktree {
+	taskID := TaskOf(key)
+	w := Worktree{Task: taskID, Key: key, Path: m.Path(key), Branch: m.ProvenBranch(key)}
+	if w.Branch == "" && taskID != "" {
+		w.Branch = Branch(taskID)
+	}
+	return w
+}
+
+var reTaskKey = regexp.MustCompile(`^(TASK-[0-9]{3,})(-|$)`)
+
+// TaskOf answers the task a run directory belongs to: TASK-001 for TASK-001,
+// TASK-001-v2 and TASK-001-hunt-run-000007; "" when the name is no task's.
+func TaskOf(key string) string {
+	if m := reTaskKey.FindStringSubmatch(key); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // Commit stages everything in the worktree and commits it. It answers the
@@ -119,6 +142,40 @@ func (m Manager) DiffStat(ctx context.Context, w Worktree) (string, error) {
 	}
 	out, err := m.git(ctx, w.Path, "diff", "--stat", strings.TrimSpace(base), "HEAD")
 	return strings.TrimSpace(out), err
+}
+
+// NumStat counts what the task's branch changed since it left the checkout:
+// `git diff --numstat <checkout HEAD>...HEAD` in the worktree. Counts only —
+// a file, its insertions and deletions; a binary file is a file with 0/0. No
+// path or line leaves this function.
+func (m Manager) NumStat(ctx context.Context, w Worktree) (execution.DiffStats, error) {
+	base, err := m.git(ctx, m.Layout.Root, "rev-parse", "HEAD")
+	if err != nil {
+		return execution.DiffStats{}, err
+	}
+	out, err := m.git(ctx, w.Path, "diff", "--numstat", strings.TrimSpace(base)+"...HEAD")
+	if err != nil {
+		return execution.DiffStats{}, err
+	}
+	return parseNumStat(out), nil
+}
+
+func parseNumStat(out string) execution.DiffStats {
+	var stats execution.DiffStats
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) < 3 {
+			continue
+		}
+		stats.Files++
+		if added, err := strconv.Atoi(fields[0]); err == nil {
+			stats.Insertions += added
+		}
+		if deleted, err := strconv.Atoi(fields[1]); err == nil {
+			stats.Deletions += deleted
+		}
+	}
+	return stats
 }
 
 // IsRepo answers whether root is inside a git repository with a commit.

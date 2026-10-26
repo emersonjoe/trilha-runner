@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +27,7 @@ import (
 // version is the release this binary is. It is a var so a release build can
 // set it at link time (`-ldflags "-X main.version=0.4.0"`); the source value
 // is what `go install` reports and what the changelog test pins.
-var version = "0.5.0"
+var version = "0.6.0"
 
 var usage = `trilha-runner ` + version + ` — executes tasks of the Trilha protocol
 
@@ -40,9 +41,28 @@ usage: trilha-runner <command> [flags]
          [--default-branch main] [--push] [--name N] [--label docker]
          [--label region:br] [--capacity 2] [--once] [--every 10s]
                          take runs from trilha-cloud and report results
-  worktree list | clean <task-id>
+  worktree list | clean <task-id | run-dir>
+                         clean stops the processes inside the worktree first, then removes it (the branch stays)
+  doctor --worktrees [--json] [--prune-orphans] [--prune-older-than 30d] [--force-unmerged] [--default-branch main]
+                         classify .trilha/runs/* (live, finished-kept, orphaned, metadata-only), age and size;
+                         deletes only with a --prune flag; exit 12 when something was skipped or failed
   drivers                the drivers available
   version
+
+During a run, for the agent (always exit 0; they talk to the runner over TRILHA_RUN_SOCKET):
+  ask "<question>"       stop for a person: the run ends needs_input with the question
+  note "<text>"          a note the next run of the task will read, quoted
+  overview "<text>"      one or two sentences on what is being done and where it stands
+  attention "<reason>" | --clear
+                         raise or clear the badge that says a person is needed
+  hook claude            what Claude Code's hooks call: the hook JSON on stdin
+  finding --severity critical|high|medium --path P --lines A-B --title T [--why W] [--repro R]
+                         a problem a review or hunt run proved (no code in it)
+  verdict pass|changes   the verdict of a review run
+  reply <comment-id> "<text>"
+                         answer one review comment of a repair run
+  artifact <file> [--name N]
+                         publish a report (.html .md .png .jpg, up to 2 MiB, five per run)
 
 The driver comes from the task's agent manifest (.trilha/agents/<name>.md) unless --driver
 is given. exec needs a command (manifest or --cmd); ai reads OPENAI_BASE_URL, OPENAI_API_KEY
@@ -56,11 +76,30 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	switch os.Args[1] {
+	case "hook", "ask", "note", "overview", "attention", "finding", "verdict", "reply", "artifact":
+		cmdAgent(ctx, os.Args[1], os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
+		return
+	}
+	selfPath = resolveSelf()
 	if err := run(ctx, os.Args[1], os.Args[2:], os.Stdout); err != nil {
+		var exit *exitError
+		if errors.As(err, &exit) {
+			fmt.Fprintln(os.Stderr, exit.message)
+			os.Exit(exit.code)
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
+
+// exitError ends the command with its own exit code, after saying why.
+type exitError struct {
+	code    int
+	message string
+}
+
+func (e *exitError) Error() string { return e.message }
 
 func run(ctx context.Context, cmd string, args []string, out io.Writer) error {
 	switch cmd {
@@ -70,6 +109,8 @@ func run(ctx context.Context, cmd string, args []string, out io.Writer) error {
 		return cmdWorker(ctx, args, out)
 	case "worktree":
 		return cmdWorktree(ctx, args, out)
+	case "doctor":
+		return cmdDoctor(ctx, args, out)
 	case "drivers":
 		fmt.Fprintln(out, strings.Join(driver.Names(), "\n"))
 		return nil
@@ -124,6 +165,7 @@ func newRunnerAt(path, drv, command string, out io.Writer) (*runner.Runner, erro
 		}
 	}
 	r.Command = command
+	r.Self = selfPath
 	r.Log = func(s string) { fmt.Fprintln(os.Stderr, "·", s) }
 	return r, nil
 }
@@ -175,7 +217,14 @@ func cmdRun(ctx context.Context, cmd string, args []string, out io.Writer) error
 }
 
 func printResult(out io.Writer, res *runner.Result) {
-	fmt.Fprintf(out, "%s → %s (driver %s, %s)\n", res.Task, res.Status, res.Driver, res.Elapsed.Round(time.Millisecond))
+	status := string(res.Status)
+	if res.NeedsInput() {
+		status = "needs input"
+	}
+	fmt.Fprintf(out, "%s → %s (driver %s, %s)\n", res.Task, status, res.Driver, res.Elapsed.Round(time.Millisecond))
+	if res.NeedsInput() {
+		fmt.Fprintf(out, "question: %s\n", res.Question.Text)
+	}
 	if res.Branch != "" {
 		fmt.Fprintf(out, "branch %s in %s\n", res.Branch, res.Worktree)
 	}
@@ -277,17 +326,21 @@ func cmdWorktree(ctx context.Context, args []string, out io.Writer) error {
 			return err
 		}
 		for _, w := range list {
-			fmt.Fprintf(out, "%-10s %-22s %s\n", w.Task, w.Branch, w.Path)
+			fmt.Fprintf(out, "%-10s %-22s %s\n", firstNonEmptyString(w.Key, w.Task), w.Branch, w.Path)
 		}
 		return nil
 	case "clean":
-		if len(args) != 2 {
-			return errors.New("usage: trilha-runner worktree clean <task-id>")
+		if len(args) != 2 || strings.ContainsAny(args[1], `/\`) || strings.HasPrefix(args[1], ".") {
+			return errors.New("usage: trilha-runner worktree clean <task-id | run-dir>")
 		}
-		if err := wm.Remove(ctx, args[1]); err != nil {
+		branch := wm.ProvenBranch(args[1])
+		if branch == "" {
+			branch = worktree.Branch(worktree.TaskOf(args[1]))
+		}
+		if err := wm.Clean(ctx, args[1], func(line string) { fmt.Fprintln(out, line) }); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "removed worktree of %s (branch %s kept)\n", args[1], worktree.Branch(args[1]))
+		fmt.Fprintf(out, "removed worktree of %s (branch %s kept)\n", args[1], branch)
 		return nil
 	}
 	return fmt.Errorf("unknown worktree command %q", args[0])
@@ -299,4 +352,106 @@ func hostname() string {
 		return "worker"
 	}
 	return h
+}
+
+func firstNonEmptyString(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// exitDoctorIncomplete is the doctor's exit code when something it was told
+// to prune was skipped (unmerged or uncommitted work) or failed.
+const exitDoctorIncomplete = 12
+
+// cmdDoctor is `trilha-runner doctor --worktrees`: a report of .trilha/runs/
+// that deletes only with a --prune flag.
+func cmdDoctor(ctx context.Context, args []string, out io.Writer) error {
+	fs := flags("doctor")
+	worktrees := fs.Bool("worktrees", false, "report on .trilha/runs/*")
+	asJSON := fs.Bool("json", false, "print the report as JSON")
+	pruneOrphans := fs.Bool("prune-orphans", false, "remove orphaned run directories")
+	olderThan := fs.String("prune-older-than", "", "remove run directories (not live) older than this, e.g. 30d or 720h")
+	force := fs.Bool("force-unmerged", false, "also remove worktrees whose branch is not merged or that have uncommitted changes")
+	defaultBranch := fs.String("default-branch", os.Getenv("TRILHA_DEFAULT_BRANCH"), "what merged means: merged into origin/<branch>")
+	if rest, err := parse(fs, args); err != nil || len(rest) > 0 || !*worktrees {
+		return errors.New("usage: trilha-runner doctor --worktrees [--json] [--prune-orphans] [--prune-older-than 30d] [--force-unmerged] [--default-branch main]")
+	}
+	var older time.Duration
+	if *olderThan != "" {
+		var err error
+		if older, err = parseAge(*olderThan); err != nil || older <= 0 {
+			return fmt.Errorf("--prune-older-than: %q is not a duration like 30d or 720h", *olderThan)
+		}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	r, err := runner.New(cwd)
+	if err != nil {
+		return err
+	}
+	wm := worktree.Manager{Layout: r.Layout}
+	var log io.Writer = os.Stderr
+	if !*asJSON {
+		log = out
+	}
+	report, err := wm.Doctor(ctx, worktree.DoctorOptions{PruneOrphans: *pruneOrphans, PruneOlderThan: older, ForceUnmerged: *force, DefaultBranch: *defaultBranch,
+		Log: func(line string) { fmt.Fprintln(log, "·", line) }})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		printJSON(out, report)
+	} else {
+		printDoctor(out, report)
+	}
+	if report.Incomplete() {
+		return &exitError{code: exitDoctorIncomplete, message: fmt.Sprintf("doctor: %d skipped, %d failed", report.Skipped, report.Failed)}
+	}
+	return nil
+}
+
+// parseAge reads a Go duration or a number of days ("30d").
+func parseAge(value string) (time.Duration, error) {
+	if days, ok := strings.CutSuffix(value, "d"); ok {
+		n, err := strconv.Atoi(days)
+		return time.Duration(n) * 24 * time.Hour, err
+	}
+	return time.ParseDuration(value)
+}
+
+func printDoctor(out io.Writer, report worktree.DoctorReport) {
+	fmt.Fprintf(out, "%-28s %-14s %-6s %9s  %-24s %s\n", "RUN", "CLASS", "AGE", "SIZE", "BRANCH", "ACTION")
+	for _, entry := range report.Entries {
+		branch := entry.Branch
+		if branch == "" {
+			branch = "-"
+		}
+		line := fmt.Sprintf("%-28s %-14s %-6s %9s  %-24s %s", entry.Key, entry.Class, entry.Bucket, humanSize(entry.Size), branch, entry.Action)
+		if note := firstNonEmptyString(entry.Note, entry.Reason); note != "" {
+			line += " — " + note
+		}
+		fmt.Fprintln(out, line)
+	}
+	fmt.Fprintf(out, "%d run directories: %d live, %d finished-kept, %d orphaned, %d metadata-only; removed %d, skipped %d, failed %d\n",
+		len(report.Entries), report.Classes[worktree.Live], report.Classes[worktree.FinishedKept], report.Classes[worktree.Orphaned], report.Classes[worktree.MetadataOnly],
+		report.Removed, report.Skipped, report.Failed)
+	for _, note := range report.Notes {
+		fmt.Fprintln(out, "note:", note)
+	}
+}
+
+func humanSize(bytes int64) string {
+	switch {
+	case bytes >= 1<<30:
+		return fmt.Sprintf("%.1f GiB", float64(bytes)/(1<<30))
+	case bytes >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(bytes)/(1<<20))
+	case bytes >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(bytes)/(1<<10))
+	}
+	return fmt.Sprintf("%d B", bytes)
 }

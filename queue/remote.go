@@ -123,7 +123,25 @@ func (r Remote) DependencyStatus(ctx context.Context, project, id string) (strin
 	return result.Status, nil
 }
 
-// Done reports the result of an item.
+// StatusError is a control plane that answered, with a status that is not
+// 2xx. A caller decides from Code whether trying again can help.
+type StatusError struct {
+	Code   int
+	Status string
+	Body   string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("queue: %s: %s", e.Status, e.Body) }
+
+// Retryable answers whether the same request may succeed later: a server
+// error, a timeout or too many requests. Any other 4xx will answer the same.
+func (e *StatusError) Retryable() bool {
+	return e.Code >= 500 || e.Code == http.StatusRequestTimeout || e.Code == http.StatusTooManyRequests
+}
+
+// Done reports the result of an item. A non-2xx answer is a *StatusError.
+// The control plane keeps one result per run and attempt, so sending the
+// same result again (the worker's outbox does, after a crash) is harmless.
 func (r Remote) Done(ctx context.Context, item Item, res Result) error {
 	resp, err := r.do(ctx, http.MethodPost, "/api/runs/"+item.ID+"/result", res)
 	if err != nil {
@@ -132,7 +150,7 @@ func (r Remote) Done(ctx context.Context, item Item, res Result) error {
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("queue: %s: %s", resp.Status, bytes.TrimSpace(b))
+		return &StatusError{Code: resp.StatusCode, Status: resp.Status, Body: string(bytes.TrimSpace(b))}
 	}
 	return nil
 }
@@ -256,4 +274,47 @@ func (r Remote) DoneDeployment(ctx context.Context, work DeploymentWork, result 
 		return fmt.Errorf("queue: deployment result: %s: %s", resp.Status, bytes.TrimSpace(body))
 	}
 	return nil
+}
+
+// ErrArtifactsDisabled is a control plane saying the project does not accept
+// artifacts (403 with code ARTIFACTS_DISABLED): the runner drops every
+// artifact of the run from its result and does not try again.
+var ErrArtifactsDisabled = errors.New("queue: the project does not accept artifacts")
+
+// UploadArtifact sends one report before the run's result:
+//
+//	PUT /api/runs/{id}/artifacts/{name}   body: the bytes
+//	Content-Type: text/html | text/markdown | image/png | image/jpeg
+//	X-Artifact-SHA256: <hex>
+//
+// 201 is accepted. A 403 whose JSON code is ARTIFACTS_DISABLED answers
+// ErrArtifactsDisabled; any other non-2xx is a *StatusError (413 too large,
+// 422 invalid). The caller never retries a 4xx.
+func (r Remote) UploadArtifact(ctx context.Context, item Item, name, contentType, sha256 string, data []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, r.BaseURL+"/api/runs/"+url.PathEscape(item.ID)+"/artifacts/"+url.PathEscape(name), bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+r.Token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Artifact-SHA256", sha256)
+	resp, err := r.client().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 == 2 {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode == http.StatusForbidden {
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal(body, &refusal) == nil && refusal.Code == "ARTIFACTS_DISABLED" {
+			return ErrArtifactsDisabled
+		}
+	}
+	return &StatusError{Code: resp.StatusCode, Status: resp.Status, Body: string(bytes.TrimSpace(body))}
 }

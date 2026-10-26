@@ -2,6 +2,110 @@
 
 This project follows semantic versioning.
 
+## 0.6.0 — 2026-10-25
+
+Protocol 0.4 (trilha-spec v0.4.0, spec 016) on the runner side: phase A of the dev-3.0 plan
+(`trilha-cloud/docs/PLANO-DEV3.md`, DV-01 to DV-04 and DV-12) and roadmap RM-012/RM-013; phase B
+(DV-05b, DV-06, DV-07, DV-08, DV-13a–c and report artifacts).
+
+### Added
+
+- **Review runs** (`kind: review`, DV-06). `review_mode: report` (the default) reviews the task's
+  branch read-only in a detached checkout of its own; `fix` works on the branch, commits and runs
+  the task's checks. The prompt points at the merge base with the default branch; the result
+  carries `review {verdict, findings}` (verdict `changes` when there are findings and the agent
+  gave none, `pass` otherwise).
+- **Bug hunts** (`kind: hunt`, DV-07): read-only, pointed at `hunt_seed`'s area and style, scoped
+  to the files the branch changed since its merge base; the result carries `findings[]` stamped
+  with the area and the style.
+- **Variants** (`variant_index`, DV-05b) work on `trilha/task-nnn-v<N>` in `.trilha/runs/TASK-NNN-vN/`,
+  prove the branch they created in `created-branch`, never adopt one they cannot prove
+  (`-vN-2`, `-vN-3`…), and read nothing a sibling left in the context pack.
+- **Review comments** (`review_comments[]`, DV-08) become a `<reviews>` block built on the runner
+  from the worktree's lines, XML-escaped and quoted as data; the result carries `review_replies[]`.
+- Agent commands `trilha-runner finding`, `verdict`, `reply` and `artifact`, and the same tools in
+  the `ai` driver. A read-only `ai` run gets neither `write_file` nor `ask`.
+- **Artifacts**: `trilha-runner artifact <file>` publishes `.html`, `.md`, `.png` or `.jpg` reports
+  (≤ 2 MiB, ≤ 5 per run), copied to `.trilha/runs/<run>/artifacts/`; the worker uploads them with
+  `PUT /api/runs/{id}/artifacts/{name}` before the result and lists only the accepted ones; 403
+  `ARTIFACTS_DISABLED` drops them all.
+- **`trilha-runner doctor --worktrees`** (DV-13a) classifies `.trilha/runs/*` as live,
+  finished-kept, orphaned or metadata-only, with age buckets and sizes; deletes only with
+  `--prune-orphans` or `--prune-older-than`, never unmerged or uncommitted work without
+  `--force-unmerged`, a branch only when `created-branch` proves the runner made it; **exit code
+  12** when something was skipped or failed.
+- Opt-in live hunt against Ollama on a planted off-by-one.
+
+- **The agent can ask.** `trilha-runner ask "<question>"`, on the agent's PATH during a run,
+  ends the run `needs_input` with the question when the agent ends its turn: the work so far is
+  committed, no check runs, no attempt failed, nothing is retried, and the task is `blocked`
+  locally. The `ai` driver has an `ask` tool that does the same. The context pack tells every
+  agent to ask one objective question and stop when information is missing.
+- **Answers continue the work.** A claim with `continuation` resumes the same claude-code session
+  (`--resume <session_id>`) with the answer, quoted, as the prompt; any other case starts a fresh
+  session with the question and the answer quoted in the context pack. claude-code sessions are
+  named up front (`--session-id <uuid>`) and the result reports `session`.
+- **Agent state.** `trilha-runner hook claude` turns Claude Code's `PreToolUse`, `PostToolUse`,
+  `Stop` and `StopFailure` hooks — configured in `.trilha/runs/TASK-NNN/claude-settings.json`,
+  beside the worktree and passed with `--settings` — into `agent_state` progress reports
+  (`working`, `idle`, `asked`, `stopped_error`…), sent only on change and at most once every 2 s;
+  the `ai` driver reports the same from its loop. `trilha-runner attention "<reason>"` and
+  `--clear` raise and clear the attention badge. The agent commands talk to the run over a Unix
+  socket (`TRILHA_RUN_SOCKET`, `TRILHA_RUN_ID`) and always exit 0 within a second.
+- **Task memory.** `trilha-runner note` and `trilha-runner overview` (and `note`/`overview` tools
+  in the `ai` driver) put `notes` (source `ai`) and `overview` in the result; the claim's
+  `context` is quoted into the context pack with `execution.QuoteContext`, labelled as
+  information, never instructions.
+- **Diff counts.** Results carry `diff_stats` (files, insertions, deletions) from
+  `git diff --numstat <checkout HEAD>...HEAD`; a binary file counts as a file with 0/0.
+- **Heartbeat during a run.** While any run is active the worker sends `running n/N` every 30 s
+  (RM-013).
+- **Result outbox.** The result is written to `.trilha/runs/<run-id>/result.json` before
+  `POST /result`, retried with backoff instead of stopping the worker, set aside as
+  `result.rejected.json` on a final 4xx, and resent at the next start (RM-012, runner side).
+- Opt-in live tests against a real model: `TRILHA_E2E_OLLAMA=1` and `TRILHA_E2E_CLAUDE=1`.
+
+### Changed
+
+- The wire types follow protocol 0.4 (`github.com/emersonjoe/trilha-spec` at `9cb760d`): the claim
+  decodes `kind`, `continuation` and `context`; progress carries `agent_state` and `attention`;
+  the result carries `question`, `session`, `overview`, `notes`, `diff_stats` and may have status
+  `needs_input`. `make conformance` also compares the `needs_input` fixture.
+- A task left `running` by a runner that died (no live process behind
+  `.trilha/runs/TASK-NNN/runner.pid`) goes back to `ready` with a note instead of blocking forever
+  (RM-012).
+- A failed `POST /result` no longer stops the worker (see the outbox above).
+- `worktree clean` first stops the processes whose current directory is inside the worktree —
+  SIGTERM, 1.5 s, SIGKILL; `/proc` on Linux, `lsof` on macOS — then removes it (DV-13b). It also
+  accepts a run directory (`TASK-001-v2`).
+- The runner records `created-branch` when it cuts a task's branch, and `checkpoint.json` and
+  `agent.log` live in the run's own directory (`.trilha/runs/<task or run key>/`).
+
+### Fixed
+
+- The agent's environment now carries `USER` and `LOGNAME`: Claude Code on macOS finds a local
+  login in the keychain by user and answered "Not logged in" without them.
+
+### Security
+
+- Questions, notes, overviews and attention reasons are size-limited (the protocol's limits) and
+  secret-scanned before they leave the machine — the run's credential and credential-shaped
+  strings (`sk-`, `ghp_`, `github_pat_`, `xox?-`, `AKIA`, private keys); a question with a secret
+  becomes a fixed notice and its words stay in `question.txt` (mode 0600). The agent socket is
+  owner-only; a session id reaches argv only as a UUID; the claude-code settings allow exactly the
+  agent's own runner commands through Bash.
+- A read-only run is verified, not trusted: a dirty worktree, a moved `HEAD` or a moved branch
+  fails it with `failure_class: policy` and discards its findings and artifacts; Docker mounts the
+  worktree read-only for it. Findings and replies are validated and secret-redacted; a text
+  artifact holding a secret is refused, an image must start with its format's bytes, and a
+  published file must come from the worktree or `$TRILHA_ARTIFACT_DIR`. Review comment bodies,
+  authors and paths are XML-escaped, quoted as data, and read only inside the worktree (symbolic
+  links included).
+- **Foreign code** (`foreign_code: true`, DV-13c) runs only in the Docker sandbox (policy failure
+  otherwise), gets no secret beyond the AI credential a command-line driver needs (none in the
+  `ai` driver's environment; its checks run in the sandbox), reads `project.verify` from the
+  default branch, and is never pushed.
+
 ## 0.5.0 — 2026-10-25
 
 ### Fixed

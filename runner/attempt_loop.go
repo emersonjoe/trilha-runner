@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/emersonjoe/trilha-runner/driver"
 	"github.com/emersonjoe/trilha-runner/internal/taskcompat"
 	"github.com/emersonjoe/trilha-runner/worktree"
 	"github.com/emersonjoe/trilha-spec/agent"
+	"github.com/emersonjoe/trilha-spec/execution"
 	"github.com/emersonjoe/trilha-spec/task"
 )
 
@@ -32,16 +34,56 @@ type attemptLoop struct {
 	result      *Result
 	started     time.Time
 	fail        func(string, error) (*Result, error)
+	// agent gathers what the agent reports; runDir is the run's directory
+	// outside the worktree; self is the binary hooks call (empty in a
+	// sandbox); resume is the session the first attempt continues with
+	// resumePrompt.
+	agent        *agentSession
+	runDir       string
+	self         string
+	resume       string
+	resumePrompt string
+	// readOnly is a hunt or a report-mode review: no preflight, no commit,
+	// no check, no task move; it ends with finishReadOnly.
+	readOnly bool
+}
+
+// execute runs one attempt of the driver. The first attempt of a
+// continuation resumes the agent's own conversation with the answer; if that
+// fails (the session is gone: another worker, a cleaned home), the same
+// attempt starts a fresh session that reads the question and answer quoted.
+func (l *attemptLoop) execute(attemptNumber int, checkpoint string) (driver.Output, error) {
+	job := driver.Job{Task: l.item, Agent: l.manifest, Prompt: l.prompt, Dir: l.dir, Command: l.runner.Command, Env: l.env, Attempt: attemptNumber, Checkpoint: checkpoint, AllowedChecks: l.checks, AI: l.ai, Prefix: l.prefix, RunDir: l.runDir, Self: l.self,
+		Kind: l.runner.Work.Kind, ReadOnly: l.readOnly}
+	for _, comment := range l.runner.Work.ReviewComments {
+		job.ReplyTo = append(job.ReplyTo, comment.ID)
+	}
+	if l.agent != nil {
+		job.Signal = l.agent.handle
+	}
+	if attemptNumber == 1 && l.resume != "" {
+		resumed := job
+		resumed.Prompt, resumed.Resume = l.resumePrompt, l.resume
+		output, err := l.driver.Execute(l.ctx, resumed)
+		if err == nil || l.agent.hasQuestion() {
+			return output, err
+		}
+		l.runner.logf("resuming session %s failed (%v); starting a fresh session with the question and answer quoted", l.resume, err)
+	}
+	return l.driver.Execute(l.ctx, job)
 }
 
 func (l *attemptLoop) run() (*Result, error) {
-	checkpoints := checkpointStore{path: filepath.Join(l.runner.Layout.Runs(), l.item.ID, "checkpoint.json")}
+	checkpoints := checkpointStore{path: filepath.Join(l.runDir, "checkpoint.json")}
 	checkpoint := checkpoints.load()
-	logPath := filepath.Join(l.runner.Layout.Runs(), l.item.ID, "agent.log")
+	logPath := filepath.Join(l.runDir, "agent.log")
 	// Before the agent is asked anything: every program the checks call must
 	// exist where the checks will run. A missing one fails every attempt the
 	// same way, so the run ends here, with one attempt and no driver call.
-	if tool, check, lookErr := l.preflight(); tool != "" {
+	// A read-only run runs no check.
+	if l.readOnly {
+		checkpoint = ""
+	} else if tool, check, lookErr := l.preflight(); tool != "" {
 		return l.failEnvironment(1, "preflight", fmt.Errorf("check %q cannot run: %w", check, lookErr), map[string]string{"tool": tool, "check": check})
 	}
 	for attemptNumber := 1; attemptNumber <= l.maxAttempts; attemptNumber++ {
@@ -49,9 +91,16 @@ func (l *attemptLoop) run() (*Result, error) {
 		l.result.Attempt = attemptNumber
 		l.runner.logf("attempt %d/%d: driver %s starting", attemptNumber, l.maxAttempts, l.driver.Name())
 		l.runner.progress(Event{Phase: "consulting_ai", Attempt: attemptNumber, MaxAttempts: l.maxAttempts, Model: l.model()})
-		output, executionErr := l.driver.Execute(l.ctx, driver.Job{Task: l.item, Agent: l.manifest, Prompt: l.prompt, Dir: l.dir, Command: l.runner.Command, Env: l.env, Attempt: attemptNumber, Checkpoint: checkpoint, AllowedChecks: l.checks, AI: l.ai, Prefix: l.prefix})
+		output, executionErr := l.execute(attemptNumber, checkpoint)
 		if err := l.captureOutput(logPath, output); err != nil {
 			return l.fail("evidence", err)
+		}
+		if question := l.agent.takeQuestion(); question != nil && l.readOnly {
+			l.runner.logf("a read-only run does not stop for questions; the agent asked: %s", execution.Truncate(question.Text, 200))
+		} else if question != nil {
+			// The agent stopped to ask. Whatever it did so far is kept on the
+			// branch; no check runs, no attempt failed, nothing is retried.
+			return l.needsInput(attemptNumber, attemptStart, output, question)
 		}
 		if executionErr != nil {
 			stage := "execution"
@@ -83,11 +132,16 @@ func (l *attemptLoop) run() (*Result, error) {
 				continue
 			}
 			l.result.FailureClass, l.result.ErrorCode = failureClass, errorCode
-			if moveErr := taskcompat.Move(l.runner.Store, l.item, task.Failed); moveErr == nil {
+			if l.readOnly {
+				l.result.Status = task.Failed
+			} else if moveErr := taskcompat.Move(l.runner.Store, l.item, task.Failed); moveErr == nil {
 				l.result.Status = task.Failed
 			}
 			l.result.Elapsed = time.Since(l.started)
 			return l.result, executionErr
+		}
+		if l.readOnly {
+			return l.finishReadOnly(attemptNumber, attemptStart, output)
 		}
 
 		passed, nextCheckpoint, err := l.verify(attemptNumber, attemptStart, output, logPath, checkpoints)
@@ -166,6 +220,36 @@ func (l *attemptLoop) model() string {
 		return l.manifest.Model
 	}
 	return ""
+}
+
+// needsInput ends the run with the agent's question: the work so far
+// committed, one attempt that did not fail, a run record that says it is
+// waiting for an answer, and the task blocked here until one comes.
+func (l *attemptLoop) needsInput(attemptNumber int, attemptStart time.Time, output driver.Output, question *execution.Question) (*Result, error) {
+	sha, err := l.manager.Commit(l.ctx, l.tree, fmt.Sprintf("%s: %s (attempt %d, asked a question)", l.item.ID, l.item.Title, attemptNumber))
+	if err != nil {
+		return l.fail("commit", err)
+	}
+	if sha != "" {
+		l.result.Commit = sha
+	}
+	l.result.Attempts = append(l.result.Attempts, attemptFromOutput(attemptNumber, "passed", "", attemptStart, output))
+	meta := map[string]string{"driver": l.driver.Name(), "stage": "needs_input", "attempt": strconv.Itoa(attemptNumber), "branch": l.tree.Branch, "commit": l.result.Commit}
+	evidence, _, err := task.Record(l.runner.Layout, task.Evidence{Task: l.item.ID, Kind: "run", By: l.runner.By, Note: "needs_input: the agent asked a question and stopped; an answer continues it in a new run", Meta: meta})
+	if err != nil {
+		return l.fail("evidence", err)
+	}
+	l.result.Evidence = append(l.result.Evidence, evidence)
+	if err := taskcompat.Move(l.runner.Store, l.item, task.Blocked); err != nil {
+		return l.fail("status", err)
+	}
+	l.result.Status = task.Blocked
+	l.result.Passed = false
+	l.result.Question = question
+	l.result.Elapsed = time.Since(l.started)
+	l.runner.progress(Event{Phase: string(execution.PhaseAwaitingInput), Message: "the agent asked a question", Attempt: attemptNumber, MaxAttempts: l.maxAttempts, AttemptStatus: "passed"})
+	l.runner.logf("%s needs input: the agent asked a question", l.item.ID)
+	return l.result, nil
 }
 
 // failEnvironment ends the run on the spot because the worker lacks a program

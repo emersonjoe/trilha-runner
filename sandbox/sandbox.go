@@ -66,6 +66,9 @@ type Docker struct {
 	Image    string
 	Services []Service
 	Binary   string
+	// ReadOnly mounts the worktree read-only (`:ro`): a hunt or a
+	// report-mode review cannot write it even if it tries.
+	ReadOnly bool
 }
 
 func (Docker) Name() string { return "docker" }
@@ -198,7 +201,7 @@ func (d Docker) Prepare(ctx context.Context, dir string, env []string) (Env, fun
 		"--tmpfs", "/tmp:rw,nosuid,nodev",
 		"--tmpfs", "/run:rw,nosuid,nodev",
 		"--env-file", environmentFile,
-		"--mount", "type=bind,src="+absolute+",dst=/workspace",
+		"--mount", workspaceMount(absolute, d.ReadOnly),
 		"--workdir", "/workspace", d.Image, "tail", "-f", "/dev/null",
 	)
 	if output, err := d.command(ctx, args...).CombinedOutput(); err != nil {
@@ -328,4 +331,14 @@ func first(value, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// workspaceMount is the bind mount of the worktree at /workspace, read-only
+// when the run may change nothing.
+func workspaceMount(dir string, readOnly bool) string {
+	mount := "type=bind,src=" + dir + ",dst=/workspace"
+	if readOnly {
+		mount += ",readonly"
+	}
+	return mount
 }

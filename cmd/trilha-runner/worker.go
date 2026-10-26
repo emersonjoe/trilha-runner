@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/emersonjoe/trilha-runner/deployer"
@@ -13,6 +15,7 @@ import (
 	"github.com/emersonjoe/trilha-runner/queue"
 	"github.com/emersonjoe/trilha-runner/runner"
 	"github.com/emersonjoe/trilha-runner/syncer"
+	"github.com/emersonjoe/trilha-spec/execution"
 )
 
 type stringList []string
@@ -36,12 +39,52 @@ type workerOptions struct {
 	Push          bool
 	Name          string
 	Capacity      int
+
+	// heartbeatTicker and execute are seams for tests: the clock that paces
+	// heartbeats during a run, and the execution of one claimed item.
+	// resultRetryBase is the first backoff of a failed result delivery.
+	heartbeatTicker func(time.Duration) (<-chan time.Time, func())
+	resultRetryBase time.Duration
+	execute         func(ctx context.Context, remote queue.Remote, item queue.Item) workerOutcome
+}
+
+// heartbeatEvery is how often a worker with an active run says it is alive
+// (RM-013). The cloud calls a worker offline after 90 s without one.
+const heartbeatEvery = 30 * time.Second
+
+func realTicker(every time.Duration) (<-chan time.Time, func()) {
+	ticker := time.NewTicker(every)
+	return ticker.C, ticker.Stop
+}
+
+// keepAlive sends `running n/N` every tick while at least one run is active,
+// so a run of twenty minutes does not leave the worker looking offline. It
+// stops with ctx. Best effort, like every heartbeat.
+func keepAlive(ctx context.Context, remote queue.Remote, running *atomic.Int32, capacity int, ticker func(time.Duration) (<-chan time.Time, func())) {
+	ticks, stop := ticker(heartbeatEvery)
+	defer stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			n := int(running.Load())
+			if n == 0 {
+				continue
+			}
+			beat := remote
+			beat.Running = n
+			_ = beat.Heartbeat(ctx, fmt.Sprintf("running %d/%d", n, capacity))
+		}
+	}
 }
 
 type workerOutcome struct {
 	item   queue.Item
 	result *runner.Result
 	report queue.Result
+	// root is the checkout that ran the item, where its outbox lives.
+	root string
 }
 
 func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, base *runner.Runner, delivery deployer.Config, deliveryEnabled bool, options workerOptions) error {
@@ -68,9 +111,31 @@ func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, ba
 	if err := remote.Heartbeat(ctx, "idle"); err != nil {
 		return err
 	}
+	baseRoot := ""
+	if base != nil {
+		baseRoot = base.Layout.Root
+	}
+	// Results a previous process could not deliver go first.
+	if err := flushOutbox(ctx, remote, outboxRoots(baseRoot, options.WorkspaceRoot), options.resultRetryBase); err != nil {
+		return nil // only a shutdown stops a flush
+	}
 	outcomes := make(chan workerOutcome, capacity)
 	var materialize sync.Mutex
 	running := 0
+	var active atomic.Int32
+	ticker := options.heartbeatTicker
+	if ticker == nil {
+		ticker = realTicker
+	}
+	execute := options.execute
+	if execute == nil {
+		execute = func(ctx context.Context, workRemote queue.Remote, item queue.Item) workerOutcome {
+			return executeWorkerItem(ctx, workRemote, base, item, options, &materialize)
+		}
+	}
+	aliveCtx, stopAlive := context.WithCancel(ctx)
+	defer stopAlive()
+	go keepAlive(aliveCtx, remote, &active, capacity, ticker)
 	for {
 		claimed := false
 		for running < capacity {
@@ -89,11 +154,12 @@ func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, ba
 			}
 			claimed = true
 			running++
+			active.Store(int32(running))
 			remote.Running = running
 			_ = remote.Heartbeat(ctx, fmt.Sprintf("running %d/%d", running, capacity))
 			workRemote := remote
 			go func(item queue.Item, workRemote queue.Remote) {
-				outcomes <- executeWorkerItem(ctx, workRemote, base, item, options, &materialize)
+				outcomes <- execute(ctx, workRemote, item)
 			}(item, workRemote)
 			if options.Once {
 				break
@@ -143,9 +209,19 @@ func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, ba
 			return nil
 		case outcome := <-outcomes:
 			running--
+			active.Store(int32(running))
 			remote.Running = running
-			if err := remote.Done(ctx, outcome.item, outcome.report); err != nil {
-				return err
+			entry := outboxEntry{RunID: outcome.item.ID, TaskID: outcome.item.TaskID, Result: outcome.report}
+			root := outcome.root
+			if root == "" {
+				root = baseRoot
+			}
+			path, err := writeOutbox(root, entry)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "· outbox for %s: %v\n", outcome.item.ID, err)
+			}
+			if err := deliver(ctx, remote, entry, path, options.resultRetryBase); err != nil {
+				return nil // shutting down; the outbox keeps the result
 			}
 			if outcome.result != nil {
 				printResult(out, outcome.result)
@@ -168,6 +244,15 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 		return workerOutcome{item: item, report: queue.Result{Status: "blocked", Error: item.Waiting, ErrorCode: "REMOTE_DEPENDENCY_WAITING"}}
 	}
 	active := *base
+	root := base.Layout.Root
+	baseBranch := options.DefaultBranch
+	withItem := func(r *runner.Runner) {
+		r.RunID, r.Continuation, r.TaskContext = item.ID, item.Continuation, item.Context
+		r.Work = runner.Work{Kind: item.Kind, ReviewOf: item.ReviewOf, ReviewMode: item.ReviewMode, HuntSeed: item.HuntSeed,
+			VariantGroup: item.VariantGroup, VariantIndex: item.VariantIndex, ReviewComments: item.ReviewComments,
+			ForeignCode: item.ForeignCode, BaseBranch: baseBranch}
+	}
+	withItem(&active)
 	active.AI = itemAI(item.AI)
 	active.Progress = progressReporter(ctx, remote, item)
 	applyDriverPreset(&active, item.AI)
@@ -193,6 +278,7 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 				}
 				bundleBranch = options.DefaultBranch
 			}
+			baseBranch = bundleBranch
 			if bundleErr == nil {
 				materialize.Lock()
 				repositoryCheckout, err := syncer.EnsureRepository(ctx, options.WorkspaceRoot, item.Project, bundleRepository, bundleBranch)
@@ -213,7 +299,9 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 						created.AI = itemAI(item.AI)
 						created.Progress = progressReporter(ctx, remote, item)
 						applyDriverPreset(created, item.AI)
+						withItem(created)
 						active = *created
+						root = created.Layout.Root
 					}
 				}
 			}
@@ -224,13 +312,63 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 	if bundleErr != nil && !errors.Is(bundleErr, queue.ErrNoBundle) {
 		runErr = bundleErr
 	} else {
+		withItem(&active)
 		result, runErr = active.Run(ctx, item.TaskID)
-		if runErr == nil && result != nil && options.Push {
+		switch {
+		case runErr != nil || result == nil || !options.Push:
+		case result.ReadOnly:
+			// A read-only run made nothing to publish.
+		case item.ForeignCode:
+			// A fork's code is never pushed to the project's own repository,
+			// where a push could start workflows that hold its secrets.
+			fmt.Fprintf(os.Stderr, "· %s: foreign code, branch %s is not pushed\n", item.ID, result.Branch)
+		default:
 			runErr = syncer.PushBranch(ctx, result.Worktree, result.Branch)
 		}
 	}
 	report := resultReport(result, runErr)
-	return workerOutcome{item: item, result: result, report: report}
+	if result != nil {
+		report.Artifacts = uploadArtifacts(ctx, remote, item, result.Artifacts, func(line string) { fmt.Fprintln(os.Stderr, "·", line) })
+	}
+	return workerOutcome{item: item, result: result, report: report, root: root}
+}
+
+// uploadArtifacts sends each artifact before the result and answers the ones
+// the control plane accepted. A project that does not allow artifacts (403
+// ARTIFACTS_DISABLED) gets none and is logged once; a refused artifact (413,
+// 422, any 4xx) is dropped and never retried; a network or server error is
+// tried twice more.
+func uploadArtifacts(ctx context.Context, remote queue.Remote, item queue.Item, artifacts []runner.Artifact, log func(string)) []execution.Artifact {
+	var accepted []execution.Artifact
+	for _, artifact := range artifacts {
+		data, err := os.ReadFile(artifact.Path)
+		if err != nil {
+			log(fmt.Sprintf("artifact %s: %v", artifact.Name, err))
+			continue
+		}
+		for attempt := 1; ; attempt++ {
+			err = remote.UploadArtifact(ctx, item, artifact.Name, artifact.ContentType, artifact.SHA256, data)
+			var status *queue.StatusError
+			retryable := err != nil && !errors.Is(err, queue.ErrArtifactsDisabled) && (!errors.As(err, &status) || status.Retryable())
+			if !retryable || attempt == 3 || ctx.Err() != nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Duration(attempt) * 200 * time.Millisecond):
+			}
+		}
+		switch {
+		case errors.Is(err, queue.ErrArtifactsDisabled):
+			log("the project does not accept artifacts: none of this run's are sent")
+			return nil
+		case err != nil:
+			log(fmt.Sprintf("artifact %s not accepted: %v", artifact.Name, err))
+		default:
+			accepted = append(accepted, artifact.Artifact)
+		}
+	}
+	return accepted
 }
 
 // progressReporter adapts a runner.Event to a best-effort POST against the
@@ -248,6 +386,8 @@ func progressReporter(ctx context.Context, remote queue.Remote, item queue.Item)
 			AttemptStatus: e.AttemptStatus,
 			FailureClass:  e.FailureClass,
 			ErrorCode:     e.ErrorCode,
+			AgentState:    e.AgentState,
+			Attention:     e.Attention,
 		})
 	}
 }
@@ -295,7 +435,13 @@ func resultReport(result *runner.Result, runErr error) queue.Result {
 		for _, attempt := range result.Attempts {
 			attempts = append(attempts, queue.Attempt{Number: attempt.Number, Status: attempt.Status, FailureClass: attempt.FailureClass, ErrorCode: attempt.ErrorCode, RepairReason: attempt.RepairReason, Model: attempt.Model, TotalTokens: attempt.TotalTokens, EstimatedCost: attempt.EstimatedCost, Provider: attempt.Provider, TokensIn: attempt.TokensIn, TokensOut: attempt.TokensOut, Cost: attempt.Cost, Currency: attempt.Currency, Started: attempt.Started, Finished: attempt.Finished})
 		}
-		report = queue.Result{ProtocolVersion: result.ProtocolVersion, Passed: result.Passed, Status: string(result.Status), Branch: result.Branch, Commit: result.Commit, Evidence: result.Evidence, Log: result.Output, Attempt: result.Attempt, FailureClass: result.FailureClass, ErrorCode: result.ErrorCode, Model: result.Model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens, EstimatedCost: result.EstimatedCost, DurationMS: result.Elapsed.Milliseconds(), FilesChanged: result.FilesChanged, DiffSummary: result.DiffSummary, AgentReport: result.AgentReport, Attempts: attempts}
+		report = queue.Result{ProtocolVersion: result.ProtocolVersion, Passed: result.Passed, Status: string(result.Status), Branch: result.Branch, Commit: result.Commit, Evidence: result.Evidence, Log: result.Output, Attempt: result.Attempt, FailureClass: result.FailureClass, ErrorCode: result.ErrorCode, Model: result.Model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens, EstimatedCost: result.EstimatedCost, DurationMS: result.Elapsed.Milliseconds(), FilesChanged: result.FilesChanged, DiffSummary: result.DiffSummary, AgentReport: result.AgentReport, Attempts: attempts,
+			Question: result.Question, Session: result.Session, Overview: result.Overview, Notes: result.Notes, DiffStats: result.DiffStats,
+			Review: result.Review, Findings: result.Findings, ReviewReplies: result.ReviewReplies}
+		if result.NeedsInput() {
+			// Not a failure: the agent stopped to ask (protocol 0.4).
+			report.Status, report.Passed = string(execution.NeedsInput), false
+		}
 	}
 	if runErr != nil {
 		report.Error = runErr.Error()

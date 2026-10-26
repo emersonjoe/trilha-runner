@@ -3,80 +3,706 @@
   "$id": "https://trilha.dev/contracts/execution/v1/schema.json",
   "title": "Trilha execution v1",
   "type": "object",
-  "required": ["protocol_version", "id", "project", "task_id", "status", "created"],
+  "required": [
+    "protocol_version",
+    "id",
+    "project",
+    "task_id",
+    "status",
+    "created"
+  ],
   "properties": {
-    "protocol_version": { "const": "trilha.execution/v1" },
-    "id": { "type": "string", "pattern": "^run-[0-9]{6,}$" },
-    "project": { "type": "string", "minLength": 1 },
-    "task_id": { "type": "string", "pattern": "^TASK-[0-9]{3,}$" },
-    "status": { "enum": ["queued", "running", "review", "failed", "done", "cancelled"] },
-    "phase": { "enum": ["queued", "preparing_context", "creating_worktree", "consulting_ai", "changing_files", "running_checks", "creating_preview", "awaiting_review", "retry_wait", "cancelling", "cancelled", "failed", "done"] },
-    "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
-    "attempt": { "type": "integer", "minimum": 0 },
-    "max_attempts": { "type": "integer", "minimum": 1 },
-    "retry_of": { "type": "string", "pattern": "^run-[0-9]{6,}$" },
-    "repair_reason": { "type": "string" },
-    "cancel_requested": { "type": "boolean" },
-    "worker": { "type": "string" },
-    "created": { "type": "string", "format": "date-time" },
-    "started": { "type": "string", "format": "date-time" },
-    "finished": { "type": "string", "format": "date-time" },
-    "events": { "type": "array", "items": { "$ref": "#/$defs/event" } },
-    "attempts": { "type": "array", "items": { "$ref": "#/$defs/attempt" } },
-    "result": { "$ref": "#/$defs/outcome" }
+    "protocol_version": {
+      "const": "trilha.execution/v1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^run-[0-9]{6,}$"
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^TASK-[0-9]{3,}$"
+    },
+    "status": {
+      "enum": [
+        "queued",
+        "running",
+        "review",
+        "failed",
+        "done",
+        "cancelled",
+        "needs_input"
+      ]
+    },
+    "phase": {
+      "enum": [
+        "queued",
+        "preparing_context",
+        "creating_worktree",
+        "consulting_ai",
+        "changing_files",
+        "running_checks",
+        "creating_preview",
+        "awaiting_review",
+        "retry_wait",
+        "cancelling",
+        "cancelled",
+        "failed",
+        "done",
+        "awaiting_input"
+      ]
+    },
+    "progress": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_attempts": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "retry_of": {
+      "type": "string",
+      "pattern": "^run-[0-9]{6,}$"
+    },
+    "repair_reason": {
+      "type": "string"
+    },
+    "cancel_requested": {
+      "type": "boolean"
+    },
+    "worker": {
+      "type": "string"
+    },
+    "created": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "started": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    },
+    "attempts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/attempt"
+      }
+    },
+    "result": {
+      "$ref": "#/$defs/outcome"
+    },
+    "kind": {
+      "enum": [
+        "implement",
+        "review",
+        "hunt"
+      ]
+    },
+    "review_of": {
+      "type": "string",
+      "pattern": "^run-[0-9]{6,}$"
+    },
+    "review_mode": {
+      "enum": [
+        "report",
+        "fix"
+      ]
+    },
+    "hunt_seed": {
+      "type": "object",
+      "required": [
+        "seed",
+        "area",
+        "style"
+      ],
+      "properties": {
+        "seed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "area": {
+          "type": "string"
+        },
+        "style": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "variant_group": {
+      "type": "string"
+    },
+    "variant_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "agent_state": {
+      "$ref": "#/$defs/agent_state"
+    },
+    "attention": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "string",
+        "maxLength": 500
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "required": [
+        "answer"
+      ],
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/session"
+        },
+        "question": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "answer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "by": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "overview": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "notes": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "review_comments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "path",
+          "body"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "line_start": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "line_end": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "side": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
   },
   "additionalProperties": true,
   "$defs": {
     "event": {
       "type": "object",
-      "required": ["sequence", "at", "phase", "message"],
+      "required": [
+        "sequence",
+        "at",
+        "phase",
+        "message"
+      ],
       "properties": {
-        "sequence": { "type": "integer", "minimum": 1 },
-        "at": { "type": "string", "format": "date-time" },
-        "phase": { "$ref": "#/properties/phase" },
-        "message": { "type": "string" },
-        "attempt": { "type": "integer", "minimum": 1 }
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "phase": {
+          "$ref": "#/properties/phase"
+        },
+        "message": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        }
       },
       "additionalProperties": true
     },
     "attempt": {
       "type": "object",
-      "required": ["number", "status", "started"],
+      "required": [
+        "number",
+        "status",
+        "started"
+      ],
       "properties": {
-        "number": { "type": "integer", "minimum": 1 },
-        "status": { "enum": ["running", "failed", "recovered", "passed", "cancelled"] },
-        "failure_class": { "type": "string" },
-        "error_code": { "type": "string" },
-        "message": { "type": "string" },
-        "repair_reason": { "type": "string" },
-        "model": { "type": "string" },
-        "total_tokens": { "type": "integer", "minimum": 0 },
-        "estimated_cost": { "type": "number", "minimum": 0 },
-        "provider": { "type": "string" },
-        "tokens_in": { "type": "integer", "minimum": 0 },
-        "tokens_out": { "type": "integer", "minimum": 0 },
-        "cost": { "type": "number", "minimum": 0 },
-        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
-        "started": { "type": "string", "format": "date-time" },
-        "finished": { "type": "string", "format": "date-time" }
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "running",
+            "failed",
+            "recovered",
+            "passed",
+            "cancelled"
+          ]
+        },
+        "failure_class": {
+          "type": "string"
+        },
+        "error_code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "repair_reason": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "total_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimated_cost": {
+          "type": "number",
+          "minimum": 0
+        },
+        "provider": {
+          "type": "string"
+        },
+        "tokens_in": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tokens_out": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost": {
+          "type": "number",
+          "minimum": 0
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "started": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished": {
+          "type": "string",
+          "format": "date-time"
+        }
       },
       "additionalProperties": true
     },
     "outcome": {
       "type": "object",
-      "required": ["passed", "status"],
+      "required": [
+        "passed",
+        "status"
+      ],
       "properties": {
-        "passed": { "type": "boolean" },
-        "status": { "$ref": "#/properties/status" },
-        "attempt": { "type": "integer", "minimum": 0 },
-        "retry_of": { "$ref": "#/properties/retry_of" },
-        "total_tokens": { "type": "integer", "minimum": 0 },
-        "estimated_cost": { "type": "number", "minimum": 0 },
-        "duration_ms": { "type": "integer", "minimum": 0 },
-        "files_changed": { "type": "array", "items": { "type": "string" } },
-        "evidence": { "type": "array", "items": { "type": "object" } }
+        "passed": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/properties/status"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retry_of": {
+          "$ref": "#/properties/retry_of"
+        },
+        "total_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimated_cost": {
+          "type": "number",
+          "minimum": 0
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "question": {
+          "type": "object",
+          "required": [
+            "text",
+            "asked_at"
+          ],
+          "properties": {
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "asked_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": true
+        },
+        "session": {
+          "$ref": "#/$defs/session"
+        },
+        "overview": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "notes": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        },
+        "diff_stats": {
+          "type": "object",
+          "required": [
+            "files",
+            "insertions",
+            "deletions"
+          ],
+          "properties": {
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "insertions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deletions": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": true
+        },
+        "review": {
+          "type": "object",
+          "required": [
+            "verdict"
+          ],
+          "properties": {
+            "verdict": {
+              "enum": [
+                "pass",
+                "changes"
+              ]
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/finding"
+              }
+            }
+          },
+          "additionalProperties": true
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "review_replies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "reply"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "reply": {
+                "type": "string",
+                "maxLength": 4000
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/artifact"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "agent_state": {
+      "enum": [
+        "working",
+        "idle",
+        "waiting_permission",
+        "asked",
+        "stopped_error"
+      ]
+    },
+    "session": {
+      "type": "object",
+      "required": [
+        "driver",
+        "session_id"
+      ],
+      "properties": {
+        "driver": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "note": {
+      "type": "object",
+      "required": [
+        "content",
+        "at"
+      ],
+      "properties": {
+        "content": {
+          "type": "string",
+          "maxLength": 1200
+        },
+        "source": {
+          "enum": [
+            "ai",
+            "operator",
+            "user"
+          ]
+        },
+        "by": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": true
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "severity",
+        "path",
+        "line_start",
+        "line_end",
+        "title"
+      ],
+      "properties": {
+        "severity": {
+          "enum": [
+            "critical",
+            "high",
+            "medium"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line_start": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "why": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "repro": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "area": {
+          "type": "string"
+        },
+        "style": {
+          "type": "string"
+        },
+        "found_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "name",
+        "content_type",
+        "size",
+        "sha256"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content_type": {
+          "enum": [
+            "text/html",
+            "text/markdown",
+            "image/png",
+            "image/jpeg"
+          ]
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2097152
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "progress": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "$ref": "#/properties/phase"
+        },
+        "message": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "branch": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "attempt_status": {
+          "type": "string"
+        },
+        "failure_class": {
+          "type": "string"
+        },
+        "error_code": {
+          "type": "string"
+        },
+        "agent_state": {
+          "$ref": "#/$defs/agent_state"
+        },
+        "attention": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "clear": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": true
+        }
       },
       "additionalProperties": true
     }
-  }
+  },
+  "$comment": "Protocol 0.4 (spec 016) adds optional fields everywhere and one status, needs_input, with phase awaiting_input. A 0.3 reader keeps decoding every other run."
 }

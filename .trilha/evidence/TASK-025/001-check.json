@@ -1,0 +1,13 @@
+{
+  "task": "TASK-025",
+  "seq": 1,
+  "kind": "check",
+  "at": "2026-10-26T01:11:44Z",
+  "by": "trilha-spec verify",
+  "command": "go test ./runner ./worktree ./sandbox ./cmd/trilha-runner -run 'TestHuntRun|TestReadOnlyRun|TestDetachedCheckoutCreatesNoBranch' -count=1",
+  "dir": "/Users/emersonoliveiradossantos/Projetos/github/trilha-runner",
+  "exit_code": 0,
+  "output": "ok  \tgithub.com/emersonjoe/trilha-runner/runner\t3.334s\nok  \tgithub.com/emersonjoe/trilha-runner/worktree\t1.456s\nok  \tgithub.com/emersonjoe/trilha-runner/sandbox\t2.478s\nok  \tgithub.com/emersonjoe/trilha-runner/cmd/trilha-runner\t3.150s\n",
+  "output_sha256": "5510c8f8dcd8cb6f53fc1384eae85c22c89300e917cc593b3b9735c163dcc014",
+  "passed": true
+}
