@@ -55,10 +55,72 @@ func (ClaudeCode) Execute(ctx context.Context, job Job) (Output, error) {
 	if len(job.Prefix) == 0 {
 		job.Env = append(job.Env, CredentialEnv(job.AI)...)
 	}
-	output, err := runArgs(ctx, job, args, strings.Join(args, " "))
+	output, raw, err := runArgsRaw(ctx, job, args, strings.Join(args, " "))
 	output.Meta["driver"] = "claude-code"
 	output.Meta["session_id"] = sessionID
+	secret := ""
+	if job.AI != nil {
+		secret = job.AI.Credential
+	}
+	applyClaudeResult(&output, raw, secret)
 	return output, err
+}
+
+// claudeResult is the part of Claude Code's `--output-format json` result the
+// runner reports: the agent's final message and what the run used.
+type claudeResult struct {
+	Type         string  `json:"type"`
+	Result       string  `json:"result"`
+	NumTurns     int     `json:"num_turns"`
+	TotalCostUSD float64 `json:"total_cost_usd"`
+	Usage        struct {
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	} `json:"usage"`
+	ModelUsage map[string]struct {
+		OutputTokens int `json:"outputTokens"`
+	} `json:"modelUsage"`
+}
+
+// applyClaudeResult finds the result line Claude Code prints last and puts
+// its final message in Text and its usage in Meta: the model it resolved (the
+// one that wrote the most), tokens with cache writes and reads counted as
+// input, and the cost in dollars. Output with no result line — an older
+// Claude Code, a crash — keeps its text and claims nothing.
+func applyClaudeResult(output *Output, raw, secret string) {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var result claudeResult
+		if json.Unmarshal([]byte(line), &result) != nil || result.Type != "result" {
+			continue
+		}
+		output.Text = tail(redactSecrets(result.Result, secret))
+		in := result.Usage.InputTokens + result.Usage.CacheCreationInputTokens + result.Usage.CacheReadInputTokens
+		output.Meta["provider"] = "anthropic"
+		output.Meta["input_tokens"] = strconv.Itoa(in)
+		output.Meta["output_tokens"] = strconv.Itoa(result.Usage.OutputTokens)
+		output.Meta["tokens"] = strconv.Itoa(in + result.Usage.OutputTokens)
+		output.Meta["turns"] = strconv.Itoa(result.NumTurns)
+		if result.TotalCostUSD > 0 {
+			output.Meta["cost_usd"] = strconv.FormatFloat(result.TotalCostUSD, 'f', -1, 64)
+		}
+		model, most := "", -1
+		for name, usage := range result.ModelUsage {
+			if usage.OutputTokens > most || (usage.OutputTokens == most && name < model) {
+				model, most = name, usage.OutputTokens
+			}
+		}
+		if model != "" {
+			output.Meta["model"] = model
+		}
+		return
+	}
 }
 
 // ClaudeSettingsFile is the name of the settings file claude-code gets.
@@ -127,7 +189,8 @@ func claudeCodeArgs(ai *AIConfig) []string {
 	if ai != nil && reModel.MatchString(ai.Model) {
 		args = append(args, "--model", ai.Model)
 	}
-	return args
+	// JSON, so the run reports the model, tokens and cost Claude Code used.
+	return append(args, "--output-format", "json")
 }
 
 // Name is "exec".
@@ -151,6 +214,13 @@ func (Exec) Execute(ctx context.Context, job Job) (Output, error) {
 // runArgs runs a program and its arguments as the job's agent: the prompt on
 // stdin, the worktree as working directory, the allow-listed environment.
 func runArgs(ctx context.Context, job Job, args []string, command string) (Output, error) {
+	output, _, err := runArgsRaw(ctx, job, args, command)
+	return output, err
+}
+
+// runArgsRaw is runArgs that also answers the whole output, untrimmed, for a
+// driver that reads structure out of it.
+func runArgsRaw(ctx context.Context, job Job, args []string, command string) (Output, string, error) {
 	runtimeDir := job.Dir
 	if len(job.Prefix) > 0 {
 		runtimeDir = "/workspace"
@@ -180,16 +250,17 @@ func runArgs(ctx context.Context, job Job, args []string, command string) (Outpu
 		secret = job.AI.Credential
 	}
 	o := Output{Text: tail(redactSecrets(out.String(), secret)), Meta: map[string]string{"driver": "exec", "command": command}}
+	raw := out.String()
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			o.Meta["exit_code"] = strconv.Itoa(ee.ExitCode())
-			return o, fmt.Errorf("exec: %s exited %d", args[0], ee.ExitCode())
+			return o, raw, fmt.Errorf("exec: %s exited %d", args[0], ee.ExitCode())
 		}
-		return o, fmt.Errorf("exec: %w", err)
+		return o, raw, fmt.Errorf("exec: %w", err)
 	}
 	o.Meta["exit_code"] = "0"
-	return o, nil
+	return o, raw, nil
 }
 
 func execEnvironment() []string {

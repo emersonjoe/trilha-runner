@@ -525,6 +525,21 @@ Pior impacto: um agente que escreve ou executa fora do seu worktree.
 - Passos: `trilha-runner drivers`.
 - Esperado: `ai`, `claude-code`, `echo`, `exec`, um por linha.
 
+**J10.3 O `claude-code` informa o modelo, os tokens e o custo que usou** — U `TestClaudeCodeReportsModelTokensAndCostFromItsJSONResult`,
+`TestClaudeCodeWithoutAJSONResultKeepsTheText`, `TestTheCostTheAgentReportsWinsOverTheEstimate`
+- Recursos: sh (um `claude` falso no `PATH`).
+- Pré-condições: um claim com o provedor `claude-code` e uma credencial inventada.
+- Dados: uma linha de resultado JSON depois de um aviso no stderr — mensagem final com a
+  credencial, 10 tokens de entrada, 26.307 de escrita em cache, 5 de leitura em cache e 40 de
+  saída, `total_cost_usd` 0,03309375, modelo `claude-haiku-4-5-20251001`; depois um `claude`
+  que só imprime texto; `TRILHA_AI_COST_PER_MILLION_TOKENS=1`.
+- Passos: executar o driver; montar a tentativa e o resultado a partir da saída, duas vezes.
+- Esperado: o argv pede `--output-format json`; o relatório é a mensagem final, redigida;
+  saem modelo, provedor `anthropic`, entrada 26.322 (cache conta como entrada), saída 40, total
+  26.362, três turnos e custo de 0,03309375 USD; o custo informado vence a estimativa por token
+  na tentativa e soma entre tentativas; texto puro fica como relatório e nada de modelo ou
+  custo é inventado; sem custo informado a estimativa continua valendo.
+
 ## J11 — Release · baixa
 
 **J11.1 O binário reporta a versão que foi publicada** — U `TestVersionMatchesTheNewestChangelogEntry`

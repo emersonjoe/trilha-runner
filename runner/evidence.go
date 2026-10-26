@@ -24,7 +24,7 @@ func (l *attemptLoop) captureOutput(logPath string, output driver.Output) error 
 	l.result.OutputTokens += fieldInt(output.Meta["output_tokens"], 0)
 	tokens := fieldInt(output.Meta["tokens"], 0)
 	l.result.TotalTokens += tokens
-	l.result.EstimatedCost += estimateCost(tokens)
+	l.result.EstimatedCost += outputCost(output, tokens)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return err
 	}

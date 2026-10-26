@@ -2,6 +2,17 @@
 
 This project follows semantic versioning.
 
+## Unreleased
+
+### Fixed
+
+- **`claude-code` runs reach the control plane with their model, tokens and cost.** The preset
+  asks Claude Code for `--output-format json` and reads its result line: the final message is
+  the report, the model it resolved, input tokens (cache writes and reads included), output
+  tokens and `total_cost_usd`. The reported cost wins over the per-token estimate. Before,
+  every `claude-code` run showed no model, tokens or cost. An older Claude Code that prints
+  plain text keeps working, with nothing invented.
+
 ## 0.6.0 — 2026-10-25
 
 Protocol 0.4 (trilha-spec v0.4.0, spec 016) on the runner side: phase A of the dev-3.0 plan

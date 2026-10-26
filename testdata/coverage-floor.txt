@@ -1,3 +1,1 @@
-# Minimum total statement coverage, in percent, that `make report` and CI accept.
-# It only rises: when the report says coverage is a point or more above, raise it.
-75.8
+76.1

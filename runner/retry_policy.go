@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/emersonjoe/trilha-runner/driver"
 )
 
 func classifyRetry(err error) (string, bool) {
@@ -78,6 +80,15 @@ func fieldInt(value string, fallback int) int {
 		return fallback
 	}
 	return number
+}
+
+// outputCost is what an attempt cost: what the driver reported (Claude Code's
+// total_cost_usd), else the per-token estimate.
+func outputCost(output driver.Output, tokens int) float64 {
+	if cost, err := strconv.ParseFloat(output.Meta["cost_usd"], 64); err == nil && cost > 0 {
+		return cost
+	}
+	return estimateCost(tokens)
 }
 
 func estimateCost(tokens int) float64 {
