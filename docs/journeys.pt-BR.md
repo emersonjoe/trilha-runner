@@ -848,3 +848,37 @@ um fork lê os segredos do worker ou escolhe os comandos que o worker roda.
   (`sandbox_required`) antes de chamar o agente; com Docker o ambiente do driver `ai` não leva
   credencial e o `exec` a recebe só como `ANTHROPIC_API_KEY`; os checks que rodam são os da task
   e o `sh -c 'exit 0'` de `main`, e `PWNED` nunca aparece.
+
+**J15.2 O doctor relata e não apaga nada sem flag** — I `TestDoctorWithoutFlagsNeverDeletes`,
+E `TestDoctorReportsAndExitsTwelveWhenItSkips`
+- Recursos: git, sh, um processo filho real, binário compilado.
+- Pré-condições: diretórios de run de todas as classes — TASK-001 terminada (20 dias), TASK-002 e
+  TASK-006 órfãs (sem arquivo de task), TASK-003 só metadados (40 dias), TASK-004 viva (um
+  `sleep` dentro da worktree), TASK-005 órfã com um commit não mesclado no branch provado.
+- Dados: `--default-branch main`.
+- Passos: rodar o doctor sem flag de poda (no processo e pelo binário, texto e `--json`).
+- Esperado: cada classe como listado, idades `<14d`, `<30d`, `>=30d`, tamanhos acima de zero,
+  TASK-005 provada e não mesclada; o número de arquivos em `.trilha/runs/` e os branches são os
+  mesmos antes e depois; saída 0.
+
+**J15.3 O doctor poda só o que as flags dizem, e sai com 12 quando pula** — I `TestDoctorPrunesOnlyWhatTheFlagsSay`,
+E `TestDoctorReportsAndExitsTwelveWhenItSkips`
+- Recursos: git, sh, um processo filho real, binário compilado.
+- Pré-condições: os diretórios de run de J15.2.
+- Dados: `--prune-orphans`; depois com `--force-unmerged` e `--prune-older-than 30d`; depois
+  `--prune-older-than 1h` numa entrada viva com 60 dias; uma duração inválida `soon`.
+- Passos: rodar o doctor com cada conjunto de flags.
+- Esperado: órfãs com branch mesclado saem, o branch provado do runner é apagado, um branch que
+  ele não provou fica (com nota); a órfã não mesclada é pulada e o comando sai com 12; forçada,
+  ela sai com o branch provado e os metadados de 40 dias também; entradas terminadas e vivas
+  ficam; uma entrada viva nunca é podada, por mais velha que seja; duração inválida sai com 1.
+
+**J15.4 Limpar uma worktree para primeiro o que roda dentro dela** — I `TestCleanStopsProcessesInsideTheWorktreeBeforeRemovingIt`
+- Recursos: git, sh, processos filhos reais; `/proc` no Linux, `lsof` no macOS.
+- Pré-condições: a worktree da TASK-001 com um `sleep` dentro, um shell num subdiretório que
+  ignora SIGTERM, e um `sleep` fora da worktree.
+- Dados: nenhum.
+- Passos: limpar a worktree (`worktree clean`, a poda do doctor).
+- Esperado: os dois processos de dentro são achados e parados — SIGTERM, depois SIGKILL para o
+  que ainda roda após 1,5 s — antes de a worktree ser removida; o processo de fora fica intocado;
+  cada etapa é registrada; o branch fica.

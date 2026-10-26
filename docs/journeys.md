@@ -836,3 +836,38 @@ worker's secrets or chooses the commands the worker runs.
   `policy` (`sandbox_required`) before the agent is called; with Docker the `ai` driver's
   environment carries no credential and `exec` gets it only as `ANTHROPIC_API_KEY`; the checks
   run are the task's and `main`'s `sh -c 'exit 0'`, and `PWNED` never appears.
+
+**J15.2 The doctor reports and deletes nothing without a flag** — I `TestDoctorWithoutFlagsNeverDeletes`,
+E `TestDoctorReportsAndExitsTwelveWhenItSkips`
+- Resources: git, sh, a real child process, compiled binary.
+- Preconditions: run directories of every class — TASK-001 finished (20 days), TASK-002 and
+  TASK-006 orphaned (no task file), TASK-003 metadata only (40 days), TASK-004 live (a `sleep`
+  sits in its worktree), TASK-005 orphaned with an unmerged commit on its proven branch.
+- Data: `--default-branch main`.
+- Steps: run the doctor with no prune flag (in-process and through the binary, text and
+  `--json`).
+- Expected: each class as listed, ages `<14d`, `<30d`, `>=30d`, sizes above zero, TASK-005
+  proven and not merged; the number of files under `.trilha/runs/` and the branches are the same
+  before and after; exit 0.
+
+**J15.3 The doctor prunes only what the flags say, and exits 12 when it skips** — I `TestDoctorPrunesOnlyWhatTheFlagsSay`,
+E `TestDoctorReportsAndExitsTwelveWhenItSkips`
+- Resources: git, sh, a real child process, compiled binary.
+- Preconditions: the run directories of J15.2.
+- Data: `--prune-orphans`; then with `--force-unmerged` and `--prune-older-than 30d`; then
+  `--prune-older-than 1h` on a live entry aged 60 days; a bad duration `soon`.
+- Steps: run the doctor with each set of flags.
+- Expected: orphans with merged branches go, the runner's proven branch deleted, a branch it did
+  not prove kept (with a note); the unmerged orphan is skipped and the command exits 12; forced,
+  it goes with its proven branch and the 40-day metadata goes too; finished and live entries
+  stay; a live entry is never pruned however old; a bad duration exits 1.
+
+**J15.4 Cleaning a worktree stops what runs inside it first** — I `TestCleanStopsProcessesInsideTheWorktreeBeforeRemovingIt`
+- Resources: git, sh, real child processes; `/proc` on Linux, `lsof` on macOS.
+- Preconditions: TASK-001's worktree with a `sleep` in it, a shell in a subdirectory that
+  ignores SIGTERM, and a `sleep` outside the worktree.
+- Data: none.
+- Steps: clean the worktree (`worktree clean`, the doctor's prune).
+- Expected: both processes inside are found and stopped — SIGTERM, then SIGKILL for the one
+  still running after 1.5 s — before the worktree is removed; the process outside is left
+  alone; each step is logged; the branch stays.
