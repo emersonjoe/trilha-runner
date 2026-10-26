@@ -122,3 +122,85 @@ func TestLiveClaudeCodeAsksAndResumesTheSession(t *testing.T) {
 	}
 	liveCase(t, "", &queue.AI{Provider: "claude-code", Model: model})
 }
+
+// buggyRepo is a tiny synthetic Go project whose task branch carries an
+// obvious planted bug: Last indexes one past the end, and its own test
+// already names the edge case that panics.
+func buggyRepo(t *testing.T) (dir, tip string) {
+	t.Helper()
+	dir = gitRepo(t)
+	os.WriteFile(filepath.Join(dir, ".trilha", "tasks", "TASK-001.md"), []byte("---\nid: TASK-001\ntitle: Add Last to the calc package\nstatus: review\nacceptance:\n  - Last answers the last element of a non-empty slice\nchecks:\n  - \"sh -c \\\"test -f calc.go\\\"\"\n---\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.local/calc\n\ngo 1.22\n"), 0o644)
+	sh(t, dir, "git", "add", "-A")
+	sh(t, dir, "git", "commit", "-q", "-m", "calc module")
+	sh(t, dir, "git", "switch", "-q", "-c", "trilha/task-001")
+	os.WriteFile(filepath.Join(dir, "calc.go"), []byte(`package calc
+
+// Last answers the last element of values.
+func Last(values []int) int {
+	return values[len(values)]
+}
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "calc_test.go"), []byte(`package calc
+
+import "testing"
+
+func TestLastOfOne(tt *testing.T) {
+	if got := Last([]int{7}); got != 7 {
+		tt.Fatalf("Last([7]) = %d, want 7", got)
+	}
+}
+`), 0o644)
+	sh(t, dir, "git", "add", "-A")
+	sh(t, dir, "git", "commit", "-q", "-m", "TASK-001: add Last")
+	tip = strings.TrimSpace(sh(t, dir, "git", "rev-parse", "HEAD"))
+	sh(t, dir, "git", "switch", "-q", "main")
+	return dir, tip
+}
+
+// TRILHA_E2E_OLLAMA=1: a read-only hunt by the ai driver against local
+// Ollama finds the planted off-by-one: the run stays read-only (done, the
+// branch at the same commit) and reports at least one finding whose path is
+// a file of the branch. Up to three tries (two retries), each logged.
+func TestLiveOllamaHuntFindsThePlantedBug(t *testing.T) {
+	if os.Getenv("TRILHA_E2E_OLLAMA") != "1" {
+		t.Skip("opt-in: set TRILHA_E2E_OLLAMA=1 with Ollama running on localhost:11434")
+	}
+	model := os.Getenv("TRILHA_E2E_OLLAMA_MODEL")
+	if model == "" {
+		model = "qwen2.5:7b"
+	}
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(git)+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin")
+	useBinary(t)
+	ai := &queue.AI{Provider: "openai", BaseURL: "http://localhost:11434/v1", Model: model, Credential: "ollama-local-FAKE"}
+	tries := liveTries()
+	for try := 1; try <= tries; try++ {
+		dir, tip := buggyRepo(t)
+		cloud := &fakeCloud{items: []queue.Item{{ID: "run-000001", Project: "demo", TaskID: "TASK-001", AI: ai, Kind: execution.KindHunt, HuntSeed: &execution.HuntSeed{Seed: 1}}}}
+		cloud.work(t, dir, "ai", "")
+		result := cloud.results["run-000001"]
+		branch := strings.TrimSpace(sh(t, dir, "git", "rev-parse", "trilha/task-001"))
+		t.Logf("try %d: status=%s passed=%v failure=%q error=%q commit=%s findings=%+v", try, result.Status, result.Passed, result.FailureClass, result.Error, result.Commit, result.Findings)
+		if branch != tip {
+			t.Fatalf("try %d: the hunt moved the branch", try)
+		}
+		if result.FailureClass == "policy" {
+			t.Fatalf("try %d: the hunt changed the repository: %s", try, result.Error)
+		}
+		valid := 0
+		for _, finding := range result.Findings {
+			if finding.Validate() == nil && exec.Command("git", "-C", dir, "cat-file", "-e", tip+":"+finding.Path).Run() == nil {
+				valid++
+			}
+		}
+		if result.Status == "done" && result.Passed && result.Commit == tip && valid > 0 {
+			t.Logf("hunt held on try %d of %d with %d valid findings", try, tries, valid)
+			return
+		}
+	}
+	t.Fatalf("the model did not report a valid finding on a read-only hunt in %d tries (see the log above)", tries)
+}

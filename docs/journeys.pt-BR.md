@@ -829,6 +829,18 @@ I `TestAIDriverReportsFindingsVerdictRepliesAndArtifacts`
   recusados, não redigidos; o envio lista só o que recebeu 201, nunca repete o 413, e com
   artefatos desligados não envia mais nada e não lista nenhum.
 
+**J14.11 Um modelo real caça só-leitura (opcional)** — E `TestLiveOllamaHuntFindsThePlantedBug`
+- Recursos: binário compilado; Ollama em `localhost:11434` (`TRILHA_E2E_OLLAMA=1`, modelo
+  `TRILHA_E2E_OLLAMA_MODEL`, padrão `qwen2.5:7b`). Pulado, dizendo como ligar, caso contrário —
+  nunca no CI.
+- Pré-condições: um módulo Go sintético cujo `trilha/task-001` adiciona `Last`, que indexa uma
+  posição além do fim, e um teste do caso de um elemento.
+- Dados: uma reivindicação de caça com `hunt_seed {1}` (error paths, pessimist) e o driver `ai`.
+- Passos: rodar o worker.
+- Esperado: a run fica `done` na ponta do branch, o branch não se move, nada é recusado por
+  política, e pelo menos um achado é válido e cita um arquivo do branch; até três tentativas,
+  cada uma registrada, porque modelos pequenos não são determinísticos.
+
 ## J15 — Operações de worktree e código de fork · alta
 
 *O operador mantém `.trilha/runs/` sob controle sem perder trabalho, e um branch vindo de fork é

@@ -818,6 +818,18 @@ I `TestAIDriverReportsFindingsVerdictRepliesAndArtifacts`
   not redacted; the upload lists only what got 201, never retries the 413, and with artifacts
   off sends nothing more and lists none.
 
+**J14.11 A real model hunts read-only (opt-in)** — E `TestLiveOllamaHuntFindsThePlantedBug`
+- Resources: compiled binary; Ollama on `localhost:11434` (`TRILHA_E2E_OLLAMA=1`, model
+  `TRILHA_E2E_OLLAMA_MODEL`, default `qwen2.5:7b`). Skipped, saying how to enable it,
+  otherwise — never in CI.
+- Preconditions: a synthetic Go module whose `trilha/task-001` adds `Last`, which indexes one
+  past the end, and a test of the one-element case.
+- Data: a hunt claim with `hunt_seed {1}` (error paths, pessimist) and the `ai` driver.
+- Steps: run the worker.
+- Expected: the run is `done` at the branch's tip, the branch does not move, nothing is refused
+  by policy, and at least one finding is valid and names a file of the branch; up to three
+  tries, each logged, because small models are not deterministic.
+
 ## J15 — Worktree operations and foreign code · high
 
 *The operator keeps `.trilha/runs/` under control without losing work, and a branch from a
