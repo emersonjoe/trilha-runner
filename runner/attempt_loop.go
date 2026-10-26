@@ -43,6 +43,9 @@ type attemptLoop struct {
 	self         string
 	resume       string
 	resumePrompt string
+	// readOnly is a hunt or a report-mode review: no preflight, no commit,
+	// no check, no task move; it ends with finishReadOnly.
+	readOnly bool
 }
 
 // execute runs one attempt of the driver. The first attempt of a
@@ -50,7 +53,11 @@ type attemptLoop struct {
 // fails (the session is gone: another worker, a cleaned home), the same
 // attempt starts a fresh session that reads the question and answer quoted.
 func (l *attemptLoop) execute(attemptNumber int, checkpoint string) (driver.Output, error) {
-	job := driver.Job{Task: l.item, Agent: l.manifest, Prompt: l.prompt, Dir: l.dir, Command: l.runner.Command, Env: l.env, Attempt: attemptNumber, Checkpoint: checkpoint, AllowedChecks: l.checks, AI: l.ai, Prefix: l.prefix, RunDir: l.runDir, Self: l.self}
+	job := driver.Job{Task: l.item, Agent: l.manifest, Prompt: l.prompt, Dir: l.dir, Command: l.runner.Command, Env: l.env, Attempt: attemptNumber, Checkpoint: checkpoint, AllowedChecks: l.checks, AI: l.ai, Prefix: l.prefix, RunDir: l.runDir, Self: l.self,
+		Kind: l.runner.Work.Kind, ReadOnly: l.readOnly}
+	for _, comment := range l.runner.Work.ReviewComments {
+		job.ReplyTo = append(job.ReplyTo, comment.ID)
+	}
 	if l.agent != nil {
 		job.Signal = l.agent.handle
 	}
@@ -67,13 +74,16 @@ func (l *attemptLoop) execute(attemptNumber int, checkpoint string) (driver.Outp
 }
 
 func (l *attemptLoop) run() (*Result, error) {
-	checkpoints := checkpointStore{path: filepath.Join(l.runner.Layout.Runs(), l.item.ID, "checkpoint.json")}
+	checkpoints := checkpointStore{path: filepath.Join(l.runDir, "checkpoint.json")}
 	checkpoint := checkpoints.load()
-	logPath := filepath.Join(l.runner.Layout.Runs(), l.item.ID, "agent.log")
+	logPath := filepath.Join(l.runDir, "agent.log")
 	// Before the agent is asked anything: every program the checks call must
 	// exist where the checks will run. A missing one fails every attempt the
 	// same way, so the run ends here, with one attempt and no driver call.
-	if tool, check, lookErr := l.preflight(); tool != "" {
+	// A read-only run runs no check.
+	if l.readOnly {
+		checkpoint = ""
+	} else if tool, check, lookErr := l.preflight(); tool != "" {
 		return l.failEnvironment(1, "preflight", fmt.Errorf("check %q cannot run: %w", check, lookErr), map[string]string{"tool": tool, "check": check})
 	}
 	for attemptNumber := 1; attemptNumber <= l.maxAttempts; attemptNumber++ {
@@ -85,7 +95,9 @@ func (l *attemptLoop) run() (*Result, error) {
 		if err := l.captureOutput(logPath, output); err != nil {
 			return l.fail("evidence", err)
 		}
-		if question := l.agent.takeQuestion(); question != nil {
+		if question := l.agent.takeQuestion(); question != nil && l.readOnly {
+			l.runner.logf("a read-only run does not stop for questions; the agent asked: %s", execution.Truncate(question.Text, 200))
+		} else if question != nil {
 			// The agent stopped to ask. Whatever it did so far is kept on the
 			// branch; no check runs, no attempt failed, nothing is retried.
 			return l.needsInput(attemptNumber, attemptStart, output, question)
@@ -120,11 +132,16 @@ func (l *attemptLoop) run() (*Result, error) {
 				continue
 			}
 			l.result.FailureClass, l.result.ErrorCode = failureClass, errorCode
-			if moveErr := taskcompat.Move(l.runner.Store, l.item, task.Failed); moveErr == nil {
+			if l.readOnly {
+				l.result.Status = task.Failed
+			} else if moveErr := taskcompat.Move(l.runner.Store, l.item, task.Failed); moveErr == nil {
 				l.result.Status = task.Failed
 			}
 			l.result.Elapsed = time.Since(l.started)
 			return l.result, executionErr
+		}
+		if l.readOnly {
+			return l.finishReadOnly(attemptNumber, attemptStart, output)
 		}
 
 		passed, nextCheckpoint, err := l.verify(attemptNumber, attemptStart, output, logPath, checkpoints)

@@ -224,3 +224,29 @@ func TestNoneRunsInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// DV-07: a read-only run mounts the worktree read-only (`:ro`); any other run
+// mounts it writable, as before.
+func TestReadOnlyRunMountsTheWorktreeReadOnly(t *testing.T) {
+	for _, readOnly := range []bool{true, false} {
+		binary, logPath := fakeDocker(t, "true")
+		dir := t.TempDir()
+		_, release, err := Docker{Image: "alpine:3", Binary: binary, ReadOnly: readOnly}.Prepare(context.Background(), dir, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		line := agentRun(t, logPath)
+		release()
+		absolute, _ := filepath.Abs(dir)
+		mount := "type=bind,src=" + absolute + ",dst=/workspace"
+		if readOnly {
+			mount += ",readonly"
+		}
+		if !strings.Contains(line, "--mount "+mount+" ") {
+			t.Errorf("read-only %v: mount is not %q:\n%s", readOnly, mount, line)
+		}
+		if !readOnly && strings.Contains(line, ",readonly") {
+			t.Errorf("a writable run got a read-only worktree:\n%s", line)
+		}
+	}
+}

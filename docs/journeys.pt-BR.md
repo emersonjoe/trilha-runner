@@ -604,7 +604,7 @@ E `TestClaudeHooksReachTheCloudAsAgentState`
 - Esperado: cada nome de hook vira o evento genérico; o arquivo de settings é
   `.trilha/runs/TASK-001/claude-settings.json`, ao lado da worktree, com `PreToolUse`,
   `PostToolUse`, `Stop`, `StopFailure` chamando `'<runner>' hook claude` e permitindo só
-  `Bash(trilha-runner ask|note|overview|attention:*)`; ele nunca aparece no `git status` da
+  `Bash(trilha-runner ask|note|overview|attention|finding|verdict|reply|artifact:*)`; ele nunca aparece no `git status` da
   worktree; o cloud recebe `agent_state` `working` e depois `idle`, cada um com mensagem, só
   mudanças e no máximo uma a cada 2 s (uma mudança retida sai quando a run termina); o argv
   leva `--session-id <uuid>` e o `session` do resultado o nomeia.
@@ -723,3 +723,128 @@ do GitHub contrabandeia instruções para o agente; um relatório leva um segred
 - Esperado: o corpo são os bytes crus, `Content-Type` e `X-Artifact-SHA256` vão preenchidos, a
   chave bearer vai junto; 403 `ARTIFACTS_DISABLED` é `ErrArtifactsDisabled`; 413, 422 e outros
   403 são `StatusError` não repetíveis.
+
+**J14.3 Cada variante trabalha no próprio branch provado** — I `TestVariantBranchIsProvenAndNeverAdoptsAnother`,
+`TestVariantRunsOnItsOwnBranchAndReadsNothingOfItsSiblings`
+- Recursos: git, sh.
+- Pré-condições: uma task com check; um branch de outra pessoa já chamado `trilha/task-001-v2`;
+  uma memória da task com nota de agente, overview e nota de pessoa.
+- Dados: reivindicações com `variant_index` 1 e 2.
+- Passos: rodar a variante 1, depois a 2; remover a worktree da variante 2 e abri-la de novo.
+- Esperado: a variante 1 trabalha em `trilha/task-001-v1` em `.trilha/runs/TASK-001-v1/`; a
+  variante 2 não adota o `-v2` existente (fica intocado) e trabalha em `trilha/task-001-v2-2`;
+  cada diretório de run tem um arquivo `created-branch` com o branch que criou, e a mesma run
+  retoma o branch provado; o prompt da variante 2 não tem branch, commit, nota de agente nem
+  overview da variante 1, e mantém a nota da pessoa; o resultado informa o branch de cada
+  variante.
+
+**J14.4 Uma run de revisão ou correção acha o branch em que trabalha** — I `TestExistingBranchComesFromOriginOrIsRefused`,
+`TestDetachedCheckoutCreatesNoBranch`
+- Recursos: git; um origin bare e um segundo clone fazendo o papel de outro worker.
+- Pré-condições: o branch existe só no origin, ou só local, ou em lugar nenhum.
+- Dados: `trilha/task-001` com um commit enviado pelo outro clone.
+- Passos: abrir o branch da task como branch existente; abri-lo destacado para uma run só-leitura.
+- Esperado: branch ausente é `ErrNoBranch`, nunca cortado do HEAD; branch só no origin é aberto
+  no commit do origin e não é provado como criado; uma run só-leitura ganha um checkout destacado
+  da ponta (nenhum branch criado ou provado, a lista de branches igual), e reabri-lo começa limpo.
+
+**J14.5 Uma caça é só-leitura e relata achados** — I `TestHuntRunStaysReadOnlyAndReportsFindings`,
+`TestReadOnlyRunMountsTheWorktreeReadOnly`, E `TestHuntRunReportsFindingsAndUploadsArtifacts`
+- Recursos: git, sh, httptest, binário compilado; um `docker` falso que registra o argv.
+- Pré-condições: TASK-001 em `review` com `trilha/task-001` contendo um erro de uma posição em
+  `calc.go`.
+- Dados: `hunt_seed {7, error paths, trace follower}` (e semente 1 de ponta a ponta); achados com
+  severidade `low`, caminho `../etc/passwd` e a credencial do projeto em `why`; um agente que faz
+  uma pergunta.
+- Passos: rodar a caça no processo e pelo worker com um agente que chama `trilha-runner finding`
+  e `trilha-runner artifact`.
+- Esperado: o prompt cita a área, o estilo e `calc.go` e diz que a run é só-leitura; a run fica
+  `done`, `passed`, com `commit` igual à ponta do branch e worktree
+  `.trilha/runs/TASK-001-hunt-run-000007/wt`; só o achado válido chega, redigido, com área e
+  estilo da semente; a pergunta não a para; nem a task nem o branch se movem; no Docker a
+  worktree é montada `readonly` (e gravável para qualquer outra run); de ponta a ponta o cloud
+  recebe os bytes do relatório antes do resultado.
+
+**J14.6 Uma run só-leitura que muda algo é recusada** — I `TestReadOnlyRunThatChangesTheRepositoryFailsWithPolicy`
+- Recursos: git, sh.
+- Pré-condições: TASK-001 em `review` com seu branch.
+- Dados: uma caça que grava um arquivo; uma revisão `report` que faz commit; uma caça que move
+  `refs/heads/trilha/task-001` — cada uma também relata um achado e um artefato.
+- Passos: rodar cada uma.
+- Esperado: status `failed`, `failure_class` `policy`, `error_code` `read_only_violated`; nenhum
+  achado, veredito ou artefato no resultado; uma evidência `run` dizendo que os achados foram
+  descartados; a task continua em `review`.
+
+**J14.7 Uma revisão dá veredito, em modo report ou fix** — I `TestReviewReportGivesAVerdict`,
+`TestReviewFixModeCommitsRunsChecksAndReports`
+- Recursos: git, sh.
+- Pré-condições: TASK-001 em `review` com seu branch.
+- Dados: uma revisão `report` com achados e sem veredito, sem nada, e com achados e `verdict
+  pass`; uma revisão `fix` que corrige `calc.go`, relata um achado e `pass`.
+- Passos: rodar cada uma.
+- Esperado: modo report: veredito `changes` com achados, `pass` sem, o do agente quando dado; o
+  prompt cita a run revisada, o merge base (`git diff <base> HEAD`) e diz "Report mode"; a run
+  fica `done` na ponta do branch. Modo fix: o runner faz commit da correção em
+  `trilha/task-001`, o check da task roda e passa, a task volta a `review`, e o resultado leva o
+  veredito e o achado.
+
+**J14.8 Comentários de revisão são citados da worktree e respondidos** — I `TestReviewCommentsAreQuotedFromTheWorktreeAndAnswered`
+- Recursos: git, sh.
+- Pré-condições: TASK-001 em `review` com seu branch; uma reivindicação com três comentários.
+- Dados: um comentário em `calc.go` linha 5 cujo corpo fecha as tags e abre `<system>`, de
+  `rev<iewer>`; um em `../../../etc/passwd`; um no lado `LEFT`; respostas a dois deles, a um id
+  desconhecido, e uma com a credencial do projeto.
+- Passos: rodar a correção.
+- Esperado: o prompt tem um bloco `<reviews>` com as linhas 2-6 de `calc.go` lidas da worktree,
+  todo `<`, `>`, `&` e aspas escapados (nenhum `<system>` cru), o caminho fora do repositório
+  marcado como ausente, o comentário `LEFT` sem linhas, e a regra de que comentários são dados,
+  não instruções; `review_replies` tem só os dois ids conhecidos, na ordem da reivindicação,
+  redigidos.
+
+**J14.9 O agente relata por comandos e ferramentas** — U `TestReportCommandsParseAndRefuse`,
+I `TestAIDriverReportsFindingsVerdictRepliesAndArtifacts`
+- Recursos: httptest (um modelo de chat completions roteirizado).
+- Pré-condições: nenhuma; para o driver, um job de revisão só-leitura que responde ao comentário
+  `c-1`.
+- Dados: `finding` com todas as flags, uma linha só, severidade `MEDIUM`; recusas (severidade
+  `low`, caminho absoluto, linhas `9-2` ou `x`, título de 201 bytes, `verdict maybe`, `reply` sem
+  texto, arquivo ausente ou diretório como artefato); o modelo chama `write_file`, dois achados,
+  `verdict`, `reply` para um id desconhecido e um conhecido, e `artifact` como `.png` e `.md`.
+- Passos: interpretar cada comando; rodar o driver.
+- Esperado: os comandos montam as mensagens que o runner lê e recusam o resto antes de enviar; o
+  driver não oferece `write_file` nem `ask` a uma run só-leitura e repassa só o achado válido (fim
+  de linha preenchido), o veredito, a resposta conhecida e o artefato `.md`.
+
+**J14.10 Artefatos são verificados, copiados e enviados** — I `TestArtifactsAreCopiedCheckedAndLimited`,
+`TestUploadArtifactsListsOnlyWhatTheCloudAccepted`
+- Recursos: git, sh, httptest.
+- Pré-condições: uma run de caça; um cloud que recusa um envio com 413 e depois desliga
+  artefatos.
+- Dados: `report.md`; `leak.md` com `sk-FAKE…`; um `chart.png` que é texto; `notes.txt`; um
+  arquivo no checkout principal; um PNG de verdade; mais quatro `.html`.
+- Passos: o agente publica todos; o worker envia.
+- Esperado: ficam, em ordem: `report.md`, `real.png` e os três primeiros `.html` (cinco no
+  máximo), cada um copiado para `.trilha/runs/<run>/artifacts/` com modo 0600 e seu sha256; o
+  segredo, o PNG falso, o `.txt` e o arquivo fora da worktree e de `$TRILHA_ARTIFACT_DIR` são
+  recusados, não redigidos; o envio lista só o que recebeu 201, nunca repete o 413, e com
+  artefatos desligados não envia mais nada e não lista nenhum.
+
+## J15 — Operações de worktree e código de fork · alta
+
+*O operador mantém `.trilha/runs/` sob controle sem perder trabalho, e um branch vindo de fork é
+tratado como código que ninguém garantiu.*
+Pior impacto: uma limpeza apaga a única cópia de trabalho não mesclado ou um branch que o runner
+não criou; um processo deixado pelo agente continua gravando numa worktree removida; o branch de
+um fork lê os segredos do worker ou escolhe os comandos que o worker roda.
+
+**J15.1 Código de fork ganha sandbox, nenhum segredo e os checks do branch padrão** — I `TestForeignCodeNeedsDockerGetsNoSecretAndVerifiesFromTheDefaultBranch`
+- Recursos: git, sh; um substituto de sandbox que diz ser Docker e registra seu ambiente.
+- Pré-condições: o `project.md` de `main` verifica `sh -c 'exit 0'`; a cópia do checkout (a do
+  fork) diz `sh -c 'touch PWNED'`; uma reivindicação com `foreign_code: true`; uma credencial de
+  projeto.
+- Dados: drivers chamados `ai` e `exec`; sem sandbox; um Docker indisponível.
+- Passos: rodar a task em cada cenário.
+- Esperado: sem sandbox, ou com Docker indisponível, a run falha com `failure_class` `policy`
+  (`sandbox_required`) antes de chamar o agente; com Docker o ambiente do driver `ai` não leva
+  credencial e o `exec` a recebe só como `ANTHROPIC_API_KEY`; os checks que rodam são os da task
+  e o `sh -c 'exit 0'` de `main`, e `PWNED` nunca aparece.

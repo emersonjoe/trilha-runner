@@ -68,7 +68,7 @@ func TestClaudeCodeNamesItsSessionAndGetsHooksOutsideTheWorktree(t *testing.T) {
 			t.Errorf("%s hooks = %+v, want %q", event, groups, want)
 		}
 	}
-	if strings.Join(file.Permissions.Allow, ",") != "Bash(trilha-runner ask:*),Bash(trilha-runner note:*),Bash(trilha-runner overview:*),Bash(trilha-runner attention:*)" {
+	if strings.Join(file.Permissions.Allow, ",") != "Bash(trilha-runner ask:*),Bash(trilha-runner note:*),Bash(trilha-runner overview:*),Bash(trilha-runner attention:*),Bash(trilha-runner finding:*),Bash(trilha-runner verdict:*),Bash(trilha-runner reply:*),Bash(trilha-runner artifact:*)" {
 		t.Errorf("print mode cannot run the agent's own commands: %v", file.Permissions.Allow)
 	}
 	if entries, _ := os.ReadDir(j.Dir); len(entries) != 0 {
@@ -154,5 +154,60 @@ func TestAIDriverReportsStateAndAsks(t *testing.T) {
 	want := []string{"tool_start", "tool_end", "tool_start", "note:GREETING.txt does not exist yet", "tool_end", "ask:What is the customer's preferred greeting?", string(execution.EventStop)}
 	if strings.Join(sequence, "|") != strings.Join(want, "|") {
 		t.Fatalf("signals:\n got %v\nwant %v", sequence, want)
+	}
+}
+
+// DV-06..DV-08 for the ai driver: a read-only review offers no write tool and
+// no ask; finding, verdict, reply and artifact reach the runner as the
+// socket commands would; an invalid finding, a reply to an unknown comment
+// and a binary artifact name are refused before anything is sent.
+func TestAIDriverReportsFindingsVerdictRepliesAndArtifacts(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no trilha-spec MCP server
+	server, _ := fakeModel(t,
+		toolCall("c1", "write_file", `{"path":"x.txt","content":"no"}`),
+		toolCall("c2", "finding", `{"severity":"high","path":"./calc.go","line_start":5,"title":"index out of range","why":"len(values)"}`),
+		toolCall("c3", "finding", `{"severity":"low","path":"calc.go","line_start":5,"line_end":5,"title":"nit"}`),
+		toolCall("c4", "verdict", `{"verdict":"changes"}`),
+		toolCall("c5", "reply", `{"id":"c-9","reply":"done"}`),
+		toolCall("c6", "reply", `{"id":"c-1","reply":"fixed the bound"}`),
+		toolCall("c7", "artifact", `{"name":"chart.png","content":"x"}`),
+		toolCall("c8", "artifact", `{"name":"review.md","content":"# Review\n"}`),
+		map[string]any{"role": "assistant", "content": "Reviewed."},
+	)
+	var mutex sync.Mutex
+	var got []agentlink.Message
+	j := job(t)
+	j.AI = &AIConfig{BaseURL: server.URL, Model: "fake-model"}
+	j.Kind, j.ReadOnly, j.ReplyTo = execution.KindReview, true, []string{"c-1"}
+	j.Signal = func(m agentlink.Message) {
+		mutex.Lock()
+		got = append(got, m)
+		mutex.Unlock()
+	}
+	if _, err := (AI{}).Execute(context.Background(), j); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(j.Dir, "x.txt")); err == nil {
+		t.Fatal("a read-only run wrote a file")
+	}
+	var reported []string
+	for _, m := range got {
+		switch m.Type {
+		case agentlink.TypeFinding:
+			reported = append(reported, "finding:"+m.Finding.Path+":"+m.Finding.Title)
+			if m.Finding.LineEnd != 5 {
+				t.Errorf("line_end = %d", m.Finding.LineEnd)
+			}
+		case agentlink.TypeVerdict, agentlink.TypeReply:
+			reported = append(reported, m.Type+":"+m.ID+m.Text)
+		case agentlink.TypeArtifact:
+			reported = append(reported, "artifact:"+m.Name+":"+m.Content)
+		case agentlink.TypeAsk:
+			t.Fatal("a read-only run could ask")
+		}
+	}
+	want := "finding:calc.go:index out of range|verdict:changes|reply:c-1fixed the bound|artifact:review.md:# Review\n"
+	if strings.Join(reported, "|") != want {
+		t.Fatalf("reported:\n got %q\nwant %q", strings.Join(reported, "|"), want)
 	}
 }

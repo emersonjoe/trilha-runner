@@ -60,11 +60,11 @@ func (d AI) Execute(ctx context.Context, job Job) (Output, error) {
 	}
 	may := func(tool string) bool { return job.Agent == nil || job.Agent.May(tool) }
 	tools := []*ai.Tool{readFile(job.Dir), listFiles(job.Dir)}
-	if may("write") {
+	if may("write") && !job.ReadOnly {
 		tools = append(tools, writeFile(job.Dir))
 	}
 	if may("run") {
-		tools = append(tools, runCommand(job.Dir, job.AllowedChecks))
+		tools = append(tools, runCommand(job.Dir, job.AllowedChecks, job.Prefix))
 	}
 	// The protocol itself, when its CLI is installed: the model can read the
 	// task, its dependencies and the evidence so far through the same MCP
@@ -84,7 +84,11 @@ func (d AI) Execute(ctx context.Context, job Job) (Output, error) {
 	var asked atomic.Bool
 	var afterAsk atomic.Int32
 	if job.Signal != nil {
-		tools = append(tools, askTool(job, &asked), memoryTool(job, "note", agentlink.TypeNote, "Leave a note the next run of this task should know (one fact, a sentence or two)."), memoryTool(job, "overview", agentlink.TypeOverview, "Set the task's overview: one or two sentences on what is being done and where it stands."))
+		if !job.ReadOnly {
+			tools = append(tools, askTool(job, &asked))
+		}
+		tools = append(tools, memoryTool(job, "note", agentlink.TypeNote, "Leave a note the next run of this task should know (one fact, a sentence or two)."), memoryTool(job, "overview", agentlink.TypeOverview, "Set the task's overview: one or two sentences on what is being done and where it stands."))
+		tools = append(tools, reportTools(job)...)
 		for _, tool := range tools {
 			tool.Func = signalled(job, tool.Name, tool.Func, &asked, &afterAsk, stopLoop)
 		}
@@ -95,7 +99,7 @@ func (d AI) Execute(ctx context.Context, job Job) (Output, error) {
 	}
 	agent := &ai.Agent{
 		Name:         "trilha-runner",
-		Instructions: "You are a software engineering agent working inside a git worktree. Use the tools to read and change files and to run commands. Work only inside the worktree. When the task is done, answer with a short report of what changed and how it was verified.",
+		Instructions: instructions(job),
 		Model:        model,
 		Tools:        tools,
 		MaxTurns:     maxTurns,
@@ -137,6 +141,75 @@ func (d AI) Execute(ctx context.Context, job Job) (Output, error) {
 		return o, fmt.Errorf("ai: %s", redactSecrets(err.Error(), secret))
 	}
 	return o, nil
+}
+
+// instructions is the agent's standing instruction: implement, or — for a
+// read-only run — read and report without changing anything.
+func instructions(job Job) string {
+	if job.ReadOnly {
+		return "You are a software engineering agent reviewing a git worktree. Use the tools to read files and run allow-listed checks. You must not change any file. Report every problem you can prove with the finding tool, with its path relative to the repository and its line range, and end with a short summary."
+	}
+	return "You are a software engineering agent working inside a git worktree. Use the tools to read and change files and to run commands. Work only inside the worktree. When the task is done, answer with a short report of what changed and how it was verified."
+}
+
+// reportTools are the tools a review, hunt or repair run reports through:
+// finding (review and hunt), verdict (review), reply (when the run answers
+// review comments) and artifact (always). The runner validates and redacts
+// what they carry, as it does for the same commands on the socket.
+func reportTools(job Job) []*ai.Tool {
+	var tools []*ai.Tool
+	if job.Kind == execution.KindReview || job.Kind == execution.KindHunt {
+		tools = append(tools, ai.NewTool("finding", "Report one problem you can prove: severity critical, high or medium; path relative to the repository; the line range; a short title; why it breaks; how to reproduce it. Never put code or secrets in a finding.",
+			ai.Schema(`{"type":"object","properties":{"severity":{"type":"string","enum":["critical","high","medium"]},"path":{"type":"string"},"line_start":{"type":"integer"},"line_end":{"type":"integer"},"title":{"type":"string"},"why":{"type":"string"},"repro":{"type":"string"}},"required":["severity","path","line_start","line_end","title"]}`),
+			func(ctx context.Context, args json.RawMessage) (string, error) {
+				var finding execution.Finding
+				if err := json.Unmarshal(args, &finding); err != nil {
+					return "", fmt.Errorf("finding: %w", err)
+				}
+				finding.Path = strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(finding.Path)), "./")
+				if finding.LineEnd == 0 {
+					finding.LineEnd = finding.LineStart
+				}
+				if err := finding.Validate(); err != nil {
+					return "", err
+				}
+				job.signal(agentlink.Message{Type: agentlink.TypeFinding, Finding: &finding})
+				return "finding recorded", nil
+			}))
+	}
+	if job.Kind == execution.KindReview {
+		tools = append(tools, ai.NewTool("verdict", "Give the review's verdict: pass when nothing needs to change, changes when at least one finding must be fixed.",
+			ai.Schema(`{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","changes"]}},"required":["verdict"]}`),
+			ai.Typed(func(ctx context.Context, in struct{ Verdict string }) (string, error) {
+				if in.Verdict != "pass" && in.Verdict != "changes" {
+					return "", fmt.Errorf("verdict: pass or changes")
+				}
+				job.signal(agentlink.Message{Type: agentlink.TypeVerdict, Text: in.Verdict})
+				return "verdict recorded", nil
+			})))
+	}
+	if len(job.ReplyTo) > 0 {
+		tools = append(tools, ai.NewTool("reply", "Answer one review comment by its id: what you did about it, or why not.",
+			ai.Schema(`{"type":"object","properties":{"id":{"type":"string"},"reply":{"type":"string"}},"required":["id","reply"]}`),
+			ai.Typed(func(ctx context.Context, in struct{ ID, Reply string }) (string, error) {
+				if !slices.Contains(job.ReplyTo, in.ID) || strings.TrimSpace(in.Reply) == "" {
+					return "", fmt.Errorf("reply: the id must be one of %s and the reply not empty", strings.Join(job.ReplyTo, ", "))
+				}
+				job.signal(agentlink.Message{Type: agentlink.TypeReply, ID: in.ID, Text: in.Reply})
+				return "reply recorded", nil
+			})))
+	}
+	tools = append(tools, ai.NewTool("artifact", "Publish a report for people to read: a name ending in .md or .html and its whole text. Never put a secret in it: a report with a secret is refused.",
+		ai.Schema(`{"type":"object","properties":{"name":{"type":"string"},"content":{"type":"string"}},"required":["name","content"]}`),
+		ai.Typed(func(ctx context.Context, in struct{ Name, Content string }) (string, error) {
+			extension := strings.ToLower(filepath.Ext(in.Name))
+			if extension != ".md" && extension != ".html" {
+				return "", fmt.Errorf("artifact: the name must end in .md or .html")
+			}
+			job.signal(agentlink.Message{Type: agentlink.TypeArtifact, Name: in.Name, Content: in.Content})
+			return "artifact sent to the runner", nil
+		})))
+	return tools
 }
 
 // askTool records the question for a person and tells the model to stop.
@@ -323,14 +396,14 @@ func writeFile(root string) *ai.Tool {
 		}))
 }
 
-func runCommand(root string, allowed []string) *ai.Tool {
+func runCommand(root string, allowed, prefix []string) *ai.Tool {
 	return ai.NewTool("run_check", "Run one exact allow-listed verification command in the worktree. Network access and credentials are removed.",
 		ai.Schema(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
 		ai.Typed(func(ctx context.Context, in struct{ Command string }) (string, error) {
 			if !allowedCommand(in.Command, allowed) {
 				return "", fmt.Errorf("run_check: command is not allow-listed")
 			}
-			e := runSandboxedCheck(ctx, in.Command, root)
+			e := runSandboxedCheck(ctx, in.Command, root, prefix)
 			out, _ := json.Marshal(map[string]any{"exit_code": e.ExitCode, "output": e.Output, "note": e.Note})
 			return string(out), nil
 		}))
@@ -349,7 +422,10 @@ func allowedCommand(command string, allowed []string) bool {
 	return false
 }
 
-func runSandboxedCheck(ctx context.Context, command, root string) task.Evidence {
+// runSandboxedCheck runs a check for the model: on the host with a scrubbed
+// environment, or through the sandbox prefix when the run has one, so a check
+// of foreign code never runs on the host.
+func runSandboxedCheck(ctx context.Context, command, root string, prefix []string) task.Evidence {
 	evidence := task.Evidence{Task: "TASK-000", Kind: "check", By: "ai", Command: command, Dir: root}
 	args := task.SplitCommand(command)
 	if len(args) == 0 {
@@ -359,7 +435,11 @@ func runSandboxedCheck(ctx context.Context, command, root string) task.Evidence 
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, task.CheckTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(checkCtx, args[0], args[1:]...)
+	program, commandArgs := args[0], args[1:]
+	if len(prefix) > 0 {
+		program, commandArgs = prefix[0], append(append([]string(nil), prefix[1:]...), args...)
+	}
+	cmd := exec.CommandContext(checkCtx, program, commandArgs...)
 	cmd.Dir = root
 	cmd.Env = safeCheckEnv()
 	var output bytes.Buffer

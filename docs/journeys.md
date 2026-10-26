@@ -595,7 +595,7 @@ E `TestClaudeHooksReachTheCloudAsAgentState`
 - Expected: each hook name maps to the generic event; the settings file is
   `.trilha/runs/TASK-001/claude-settings.json`, beside the worktree, with `PreToolUse`,
   `PostToolUse`, `Stop`, `StopFailure` calling `'<runner>' hook claude` and allowing only
-  `Bash(trilha-runner ask|note|overview|attention:*)`; it never shows in the worktree's
+  `Bash(trilha-runner ask|note|overview|attention|finding|verdict|reply|artifact:*)`; it never shows in the worktree's
   `git status`; the cloud receives `agent_state` `working` then `idle`, each with a message,
   changes only and at most one per 2 s (a held change goes out when the run ends); argv
   carries `--session-id <uuid>` and the result's `session` names it.
@@ -714,3 +714,125 @@ instructions into the agent; a report carries a secret to the cloud.
 - Expected: the body is the raw bytes, `Content-Type` and `X-Artifact-SHA256` are set, the
   bearer key goes along; 403 `ARTIFACTS_DISABLED` is `ErrArtifactsDisabled`; 413, 422 and other
   403s are `StatusError`s that are not retryable.
+
+**J14.3 Each variant works on its own proven branch** — I `TestVariantBranchIsProvenAndNeverAdoptsAnother`,
+`TestVariantRunsOnItsOwnBranchAndReadsNothingOfItsSiblings`
+- Resources: git, sh.
+- Preconditions: a task with a check; someone else's branch already named
+  `trilha/task-001-v2`; a task memory with an agent's note, an overview and a person's note.
+- Data: claims with `variant_index` 1 and 2.
+- Steps: run variant 1, then variant 2; remove variant 2's worktree and open it again.
+- Expected: variant 1 works on `trilha/task-001-v1` in `.trilha/runs/TASK-001-v1/`; variant 2
+  does not adopt the existing `-v2` (left untouched) and works on `trilha/task-001-v2-2`; each
+  run directory has a `created-branch` file naming the branch it created, and the same run takes
+  its proven branch back; variant 2's prompt has no branch, commit, agent note or overview of
+  variant 1, and keeps the person's note; the result reports each variant's branch.
+
+**J14.4 A review or repair run finds the branch it works on** — I `TestExistingBranchComesFromOriginOrIsRefused`,
+`TestDetachedCheckoutCreatesNoBranch`
+- Resources: git; a bare origin and a second clone standing for another worker.
+- Preconditions: the branch exists only on origin, or only locally, or nowhere.
+- Data: `trilha/task-001` with one commit pushed by the other clone.
+- Steps: open the task's branch as an existing branch; open it detached for a read-only run.
+- Expected: a missing branch is `ErrNoBranch`, never cut from HEAD; a branch only on origin is
+  checked out at origin's commit and not proven as created; a read-only run gets a detached
+  checkout of the tip (no branch created or proven, the list of branches unchanged), and opening
+  it again starts clean.
+
+**J14.5 A hunt is read-only and reports findings** — I `TestHuntRunStaysReadOnlyAndReportsFindings`,
+`TestReadOnlyRunMountsTheWorktreeReadOnly`, E `TestHuntRunReportsFindingsAndUploadsArtifacts`
+- Resources: git, sh, httptest, compiled binary; a fake `docker` that logs its argv.
+- Preconditions: TASK-001 in `review` with `trilha/task-001` holding an off-by-one in
+  `calc.go`.
+- Data: `hunt_seed {7, error paths, trace follower}` (and seed 1 end to end); findings with a
+  severity `low`, a path `../etc/passwd` and the project credential in `why`; an agent that
+  asks a question.
+- Steps: run the hunt in-process and through the worker with an agent that calls
+  `trilha-runner finding` and `trilha-runner artifact`.
+- Expected: the prompt names the area, the style and `calc.go` and says the run is read-only;
+  the run is `done`, `passed`, its `commit` the branch's tip, its worktree
+  `.trilha/runs/TASK-001-hunt-run-000007/wt`; only the valid finding arrives, redacted, with the
+  seed's area and style; the question does not stop it; neither the task nor the branch moves;
+  in Docker the worktree is mounted `readonly` (and writable for any other run); end to end the
+  cloud gets the report bytes before the result.
+
+**J14.6 A read-only run that changes something is refused** — I `TestReadOnlyRunThatChangesTheRepositoryFailsWithPolicy`
+- Resources: git, sh.
+- Preconditions: TASK-001 in `review` with its branch.
+- Data: a hunt that writes a file; a report-mode review that commits; a hunt that moves
+  `refs/heads/trilha/task-001` — each also reports a finding and an artifact.
+- Steps: run each.
+- Expected: status `failed`, `failure_class` `policy`, `error_code` `read_only_violated`; no
+  finding, verdict or artifact in the result; a `run` evidence saying the findings are
+  discarded; the task still `review`.
+
+**J14.7 A review gives a verdict, in report or fix mode** — I `TestReviewReportGivesAVerdict`,
+`TestReviewFixModeCommitsRunsChecksAndReports`
+- Resources: git, sh.
+- Preconditions: TASK-001 in `review` with its branch.
+- Data: a report-mode review with findings and no verdict, with nothing, and with findings and
+  `verdict pass`; a fix-mode review that corrects `calc.go`, reports a finding and `pass`.
+- Steps: run each.
+- Expected: report mode: verdict `changes` with findings, `pass` without, the agent's own when
+  given; the prompt names the run reviewed, the merge base (`git diff <base> HEAD`) and says
+  "Report mode"; the run is `done` at the branch's tip. Fix mode: the runner commits the fix on
+  `trilha/task-001`, the task's check runs and passes, the task is back in `review`, and the
+  result carries the verdict and the finding.
+
+**J14.8 Review comments are quoted from the worktree and answered** — I `TestReviewCommentsAreQuotedFromTheWorktreeAndAnswered`
+- Resources: git, sh.
+- Preconditions: TASK-001 in `review` with its branch; a claim with three review comments.
+- Data: a comment on `calc.go` line 5 whose body closes the tags and opens `<system>`, by
+  `rev<iewer>`; one on `../../../etc/passwd`; one on the `LEFT` side; replies to two of them, to
+  an unknown id, and one holding the project credential.
+- Steps: run the repair.
+- Expected: the prompt has a `<reviews>` block with lines 2-6 of `calc.go` read from the
+  worktree, every `<`, `>`, `&` and quote escaped (no raw `<system>`), the path outside the
+  repository marked missing, the `LEFT` comment without lines, and the rule that comments are
+  data, not instructions; `review_replies` hold only the two known ids, in the claim's order,
+  redacted.
+
+**J14.9 The agent reports through commands and tools** — U `TestReportCommandsParseAndRefuse`,
+I `TestAIDriverReportsFindingsVerdictRepliesAndArtifacts`
+- Resources: httptest (a scripted chat-completions model).
+- Preconditions: none; for the driver, a read-only review job that answers comment `c-1`.
+- Data: `finding` with every flag, a single line, severity `MEDIUM`; refusals (severity `low`,
+  an absolute path, lines `9-2` or `x`, a title of 201 bytes, `verdict maybe`, `reply` without
+  text, a missing file or a directory as artifact); the model calls `write_file`, two findings,
+  `verdict`, `reply` to an unknown and a known id, and `artifact` as `.png` and `.md`.
+- Steps: parse each command; run the driver.
+- Expected: the commands build the messages the runner reads and refuse the rest before sending;
+  the driver offers no `write_file` and no `ask` to a read-only run and forwards only the valid
+  finding (line end defaulted), the verdict, the known reply and the `.md` artifact.
+
+**J14.10 Artifacts are checked, copied and uploaded** — I `TestArtifactsAreCopiedCheckedAndLimited`,
+`TestUploadArtifactsListsOnlyWhatTheCloudAccepted`
+- Resources: git, sh, httptest.
+- Preconditions: a hunt run; a cloud that refuses one upload with 413, then disables artifacts.
+- Data: `report.md`; `leak.md` holding `sk-FAKE…`; a `chart.png` that is text; `notes.txt`; a
+  file in the main checkout; a real PNG; four more `.html`.
+- Steps: the agent publishes them all; the worker uploads.
+- Expected: kept, in order: `report.md`, `real.png` and the first three `.html` (five at most),
+  each copied to `.trilha/runs/<run>/artifacts/` with mode 0600 and its sha256; the secret, the
+  fake PNG, the `.txt` and the file outside the worktree and `$TRILHA_ARTIFACT_DIR` are refused,
+  not redacted; the upload lists only what got 201, never retries the 413, and with artifacts
+  off sends nothing more and lists none.
+
+## J15 — Worktree operations and foreign code · high
+
+*The operator keeps `.trilha/runs/` under control without losing work, and a branch from a
+fork is treated as code nobody vouched for.*
+Worst impact: a cleanup deletes the only copy of unmerged work or a branch the runner did not
+create; a process the agent left keeps writing into a removed worktree; a fork's branch reads the
+worker's secrets or chooses the commands the worker runs.
+
+**J15.1 Foreign code gets the sandbox, no secret and the default branch's checks** — I `TestForeignCodeNeedsDockerGetsNoSecretAndVerifiesFromTheDefaultBranch`
+- Resources: git, sh; a sandbox stand-in that says it is Docker and records its environment.
+- Preconditions: `project.md` on `main` verifies `sh -c 'exit 0'`; the checkout's copy (the
+  fork's) says `sh -c 'touch PWNED'`; a claim with `foreign_code: true`; a project credential.
+- Data: drivers named `ai` and `exec`; no sandbox; a Docker that is unavailable.
+- Steps: run the task in each setup.
+- Expected: without a sandbox, or with Docker unavailable, the run fails with `failure_class`
+  `policy` (`sandbox_required`) before the agent is called; with Docker the `ai` driver's
+  environment carries no credential and `exec` gets it only as `ANTHROPIC_API_KEY`; the checks
+  run are the task's and `main`'s `sh -c 'exit 0'`, and `PWNED` never appears.

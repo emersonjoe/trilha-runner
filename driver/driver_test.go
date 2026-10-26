@@ -112,10 +112,10 @@ func TestToolsStayInside(t *testing.T) {
 		t.Fatalf("list = %q", out)
 	}
 	if runtime.GOOS != "windows" {
-		if out, _ := runCommand(root, []string{"go version"}).Func(ctx, []byte(`{"command":"go version"}`)); !strings.Contains(out, `"exit_code":0`) {
+		if out, _ := runCommand(root, []string{"go version"}, nil).Func(ctx, []byte(`{"command":"go version"}`)); !strings.Contains(out, `"exit_code":0`) {
 			t.Fatalf("run = %q", out)
 		}
-		if _, err := runCommand(root, []string{"go version"}).Func(ctx, []byte(`{"command":"sh -c \"exit 2\""}`)); err == nil {
+		if _, err := runCommand(root, []string{"go version"}, nil).Func(ctx, []byte(`{"command":"sh -c \"exit 2\""}`)); err == nil {
 			t.Fatal("non-allow-listed shell command was accepted")
 		}
 	}

@@ -1,7 +1,8 @@
 // Package agentlink is the channel between an agent and the runner that
 // started it. The runner listens on a Unix socket for the duration of a run
 // and exports its path as TRILHA_RUN_SOCKET; `trilha-runner hook`, `ask`,
-// `note`, `overview` and `attention`, run by the agent, each send one JSON
+// `note`, `overview`, `attention`, `finding`, `verdict`, `reply` and
+// `artifact`, run by the agent, each send one JSON
 // message and exit. Delivery is best effort and bounded in time: an agent is
 // never held up, or failed, because the runner is not listening.
 package agentlink
@@ -29,6 +30,11 @@ const (
 	TypeAttention = "attention"
 	TypeNote      = "note"
 	TypeOverview  = "overview"
+	// Review, hunt and repair runs (protocol 0.4).
+	TypeFinding  = "finding"
+	TypeVerdict  = "verdict"
+	TypeReply    = "reply"
+	TypeArtifact = "artifact"
 )
 
 // Message is one thing the agent tells the runner.
@@ -38,6 +44,16 @@ type Message struct {
 	Text      string               `json:"text,omitempty"`
 	Clear     bool                 `json:"clear,omitempty"`
 	SessionID string               `json:"session_id,omitempty"`
+	// Finding is one problem a review or hunt proved.
+	Finding *execution.Finding `json:"finding,omitempty"`
+	// ID is the review comment a reply answers.
+	ID string `json:"id,omitempty"`
+	// Name, Path and Content publish an artifact: a file the runner copies
+	// (Path, from a command-line agent) or its text (Content, from an
+	// in-process driver).
+	Name    string `json:"name,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 // MaxMessage bounds one message; MaxMessages bounds a run, so a looping agent
@@ -47,10 +63,13 @@ const (
 	MaxMessages = 10000
 )
 
-// Environment names the runner exports to the agent.
+// Environment names the runner exports to the agent. EnvArtifactDir is a
+// directory outside the worktree where a read-only run writes the reports
+// it publishes with `trilha-runner artifact`.
 const (
-	EnvSocket = "TRILHA_RUN_SOCKET"
-	EnvRunID  = "TRILHA_RUN_ID"
+	EnvSocket      = "TRILHA_RUN_SOCKET"
+	EnvRunID       = "TRILHA_RUN_ID"
+	EnvArtifactDir = "TRILHA_ARTIFACT_DIR"
 )
 
 // maxSocketPath is below the smallest sun_path of the platforms the runner

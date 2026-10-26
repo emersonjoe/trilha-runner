@@ -112,6 +112,10 @@ type fakeCloud struct {
 	items    []queue.Item
 	progress []queue.Progress
 	results  map[string]queue.Result
+	// artifacts keeps every accepted upload by run and name; artifactsOff
+	// answers 403 ARTIFACTS_DISABLED instead.
+	artifacts    map[string][]byte
+	artifactsOff bool
 }
 
 func (c *fakeCloud) serve(t *testing.T) *httptest.Server {
@@ -129,6 +133,18 @@ func (c *fakeCloud) serve(t *testing.T) *httptest.Server {
 			c.items = c.items[1:]
 		case strings.HasSuffix(r.URL.Path, "/bundle"):
 			http.NotFound(w, r)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/artifacts/"):
+			if c.artifactsOff {
+				w.WriteHeader(http.StatusForbidden)
+				io.WriteString(w, `{"code":"ARTIFACTS_DISABLED"}`)
+				return
+			}
+			data, _ := io.ReadAll(r.Body)
+			if c.artifacts == nil {
+				c.artifacts = map[string][]byte{}
+			}
+			c.artifacts[strings.TrimPrefix(r.URL.Path, "/api/runs/")] = data
+			w.WriteHeader(http.StatusCreated)
 		case strings.HasSuffix(r.URL.Path, "/progress"):
 			var p queue.Progress
 			_ = json.NewDecoder(r.Body).Decode(&p)

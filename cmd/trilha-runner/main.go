@@ -51,6 +51,13 @@ During a run, for the agent (always exit 0; they talk to the runner over TRILHA_
   attention "<reason>" | --clear
                          raise or clear the badge that says a person is needed
   hook claude            what Claude Code's hooks call: the hook JSON on stdin
+  finding --severity critical|high|medium --path P --lines A-B --title T [--why W] [--repro R]
+                         a problem a review or hunt run proved (no code in it)
+  verdict pass|changes   the verdict of a review run
+  reply <comment-id> "<text>"
+                         answer one review comment of a repair run
+  artifact <file> [--name N]
+                         publish a report (.html .md .png .jpg, up to 2 MiB, five per run)
 
 The driver comes from the task's agent manifest (.trilha/agents/<name>.md) unless --driver
 is given. exec needs a command (manifest or --cmd); ai reads OPENAI_BASE_URL, OPENAI_API_KEY
@@ -65,7 +72,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	switch os.Args[1] {
-	case "hook", "ask", "note", "overview", "attention":
+	case "hook", "ask", "note", "overview", "attention", "finding", "verdict", "reply", "artifact":
 		cmdAgent(ctx, os.Args[1], os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
 		return
 	}

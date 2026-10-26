@@ -20,6 +20,7 @@ import (
 
 	"github.com/emersonjoe/trilha-runner/internal/agentlink"
 	"github.com/emersonjoe/trilha-spec/agent"
+	"github.com/emersonjoe/trilha-spec/execution"
 	"github.com/emersonjoe/trilha-spec/task"
 )
 
@@ -60,6 +61,14 @@ type Job struct {
 	// Resume is the agent session to continue (claude-code's --resume), when
 	// the run answers a question that session asked.
 	Resume string
+	// Kind is what the run is for: an in-process driver offers the finding
+	// tool to review and hunt runs and the verdict tool to review runs.
+	Kind execution.Kind
+	// ReadOnly is a run that may change nothing (a hunt, a report-mode
+	// review): an in-process driver offers no tool that writes.
+	ReadOnly bool
+	// ReplyTo are the review comments the agent answers with the reply tool.
+	ReplyTo []string
 }
 
 // signal reports to the job's listener, if any.

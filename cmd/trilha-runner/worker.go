@@ -245,8 +245,12 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 	}
 	active := *base
 	root := base.Layout.Root
+	baseBranch := options.DefaultBranch
 	withItem := func(r *runner.Runner) {
 		r.RunID, r.Continuation, r.TaskContext = item.ID, item.Continuation, item.Context
+		r.Work = runner.Work{Kind: item.Kind, ReviewOf: item.ReviewOf, ReviewMode: item.ReviewMode, HuntSeed: item.HuntSeed,
+			VariantGroup: item.VariantGroup, VariantIndex: item.VariantIndex, ReviewComments: item.ReviewComments,
+			ForeignCode: item.ForeignCode, BaseBranch: baseBranch}
 	}
 	withItem(&active)
 	active.AI = itemAI(item.AI)
@@ -274,6 +278,7 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 				}
 				bundleBranch = options.DefaultBranch
 			}
+			baseBranch = bundleBranch
 			if bundleErr == nil {
 				materialize.Lock()
 				repositoryCheckout, err := syncer.EnsureRepository(ctx, options.WorkspaceRoot, item.Project, bundleRepository, bundleBranch)
@@ -307,13 +312,63 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 	if bundleErr != nil && !errors.Is(bundleErr, queue.ErrNoBundle) {
 		runErr = bundleErr
 	} else {
+		withItem(&active)
 		result, runErr = active.Run(ctx, item.TaskID)
-		if runErr == nil && result != nil && options.Push {
+		switch {
+		case runErr != nil || result == nil || !options.Push:
+		case result.ReadOnly:
+			// A read-only run made nothing to publish.
+		case item.ForeignCode:
+			// A fork's code is never pushed to the project's own repository,
+			// where a push could start workflows that hold its secrets.
+			fmt.Fprintf(os.Stderr, "· %s: foreign code, branch %s is not pushed\n", item.ID, result.Branch)
+		default:
 			runErr = syncer.PushBranch(ctx, result.Worktree, result.Branch)
 		}
 	}
 	report := resultReport(result, runErr)
+	if result != nil {
+		report.Artifacts = uploadArtifacts(ctx, remote, item, result.Artifacts, func(line string) { fmt.Fprintln(os.Stderr, "·", line) })
+	}
 	return workerOutcome{item: item, result: result, report: report, root: root}
+}
+
+// uploadArtifacts sends each artifact before the result and answers the ones
+// the control plane accepted. A project that does not allow artifacts (403
+// ARTIFACTS_DISABLED) gets none and is logged once; a refused artifact (413,
+// 422, any 4xx) is dropped and never retried; a network or server error is
+// tried twice more.
+func uploadArtifacts(ctx context.Context, remote queue.Remote, item queue.Item, artifacts []runner.Artifact, log func(string)) []execution.Artifact {
+	var accepted []execution.Artifact
+	for _, artifact := range artifacts {
+		data, err := os.ReadFile(artifact.Path)
+		if err != nil {
+			log(fmt.Sprintf("artifact %s: %v", artifact.Name, err))
+			continue
+		}
+		for attempt := 1; ; attempt++ {
+			err = remote.UploadArtifact(ctx, item, artifact.Name, artifact.ContentType, artifact.SHA256, data)
+			var status *queue.StatusError
+			retryable := err != nil && !errors.Is(err, queue.ErrArtifactsDisabled) && (!errors.As(err, &status) || status.Retryable())
+			if !retryable || attempt == 3 || ctx.Err() != nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Duration(attempt) * 200 * time.Millisecond):
+			}
+		}
+		switch {
+		case errors.Is(err, queue.ErrArtifactsDisabled):
+			log("the project does not accept artifacts: none of this run's are sent")
+			return nil
+		case err != nil:
+			log(fmt.Sprintf("artifact %s not accepted: %v", artifact.Name, err))
+		default:
+			accepted = append(accepted, artifact.Artifact)
+		}
+	}
+	return accepted
 }
 
 // progressReporter adapts a runner.Event to a best-effort POST against the
@@ -381,7 +436,8 @@ func resultReport(result *runner.Result, runErr error) queue.Result {
 			attempts = append(attempts, queue.Attempt{Number: attempt.Number, Status: attempt.Status, FailureClass: attempt.FailureClass, ErrorCode: attempt.ErrorCode, RepairReason: attempt.RepairReason, Model: attempt.Model, TotalTokens: attempt.TotalTokens, EstimatedCost: attempt.EstimatedCost, Provider: attempt.Provider, TokensIn: attempt.TokensIn, TokensOut: attempt.TokensOut, Cost: attempt.Cost, Currency: attempt.Currency, Started: attempt.Started, Finished: attempt.Finished})
 		}
 		report = queue.Result{ProtocolVersion: result.ProtocolVersion, Passed: result.Passed, Status: string(result.Status), Branch: result.Branch, Commit: result.Commit, Evidence: result.Evidence, Log: result.Output, Attempt: result.Attempt, FailureClass: result.FailureClass, ErrorCode: result.ErrorCode, Model: result.Model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens, EstimatedCost: result.EstimatedCost, DurationMS: result.Elapsed.Milliseconds(), FilesChanged: result.FilesChanged, DiffSummary: result.DiffSummary, AgentReport: result.AgentReport, Attempts: attempts,
-			Question: result.Question, Session: result.Session, Overview: result.Overview, Notes: result.Notes, DiffStats: result.DiffStats}
+			Question: result.Question, Session: result.Session, Overview: result.Overview, Notes: result.Notes, DiffStats: result.DiffStats,
+			Review: result.Review, Findings: result.Findings, ReviewReplies: result.ReviewReplies}
 		if result.NeedsInput() {
 			// Not a failure: the agent stopped to ask (protocol 0.4).
 			report.Status, report.Passed = string(execution.NeedsInput), false

@@ -32,6 +32,8 @@ type agentSession struct {
 	state     *stateReporter
 	attention func(execution.Attention)
 	logf      func(string, ...any)
+	// report gathers findings, a verdict, replies and artifacts.
+	report agentReport
 }
 
 func (a *agentSession) handle(message agentlink.Message) {
@@ -72,6 +74,8 @@ func (a *agentSession) handle(message agentlink.Message) {
 		a.mu.Lock()
 		a.overview = execution.Truncate(overview, execution.MaxOverview)
 		a.mu.Unlock()
+	case agentlink.TypeFinding, agentlink.TypeVerdict, agentlink.TypeReply, agentlink.TypeArtifact:
+		a.handleReport(message)
 	}
 }
 
@@ -251,6 +255,12 @@ func (r *Runner) openAgentLink(id, runDir string, env *[]string, onHost bool) (*
 		return session, session.state.close
 	}
 	*env = append(*env, agentlink.EnvSocket+"="+server.Path(), agentlink.EnvRunID+"="+firstNonEmpty(r.RunID, id))
+	// Where a read-only run writes the reports it publishes: outside the
+	// worktree, which must stay clean.
+	scratch := filepath.Join(runDir, "scratch")
+	if err := os.MkdirAll(scratch, 0o700); err == nil {
+		*env = append(*env, agentlink.EnvArtifactDir+"="+scratch)
+	}
 	if r.Self != "" {
 		bin := filepath.Join(runDir, "bin")
 		link := filepath.Join(bin, "trilha-runner")

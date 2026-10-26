@@ -75,7 +75,7 @@ func writeClaudeSettings(dir, self string) (string, error) {
 		hooks[event] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 5}}}}
 	}
 	var allow []string
-	for _, sub := range []string{"ask", "note", "overview", "attention"} {
+	for _, sub := range []string{"ask", "note", "overview", "attention", "finding", "verdict", "reply", "artifact"} {
 		allow = append(allow, "Bash(trilha-runner "+sub+":*)")
 	}
 	data, err := json.MarshalIndent(map[string]any{"hooks": hooks, "permissions": map[string]any{"allow": allow}}, "", "  ")
