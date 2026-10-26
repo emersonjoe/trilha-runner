@@ -150,6 +150,7 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	r.resumeOrphan(t)
 	if t.Status != task.Ready {
 		return nil, fmt.Errorf("task %s is %s, not ready", id, t.Status)
 	}
@@ -170,6 +171,7 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	if err := r.moveRunning(t); err != nil {
 		return nil, err
 	}
+	defer r.markRunning(id)()
 	res := &Result{ProtocolVersion: "trilha.execution/v1", Task: id}
 	fail := func(stage string, cause error) (*Result, error) {
 		note := cause.Error()

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,7 +41,9 @@ type workerOptions struct {
 
 	// heartbeatTicker and execute are seams for tests: the clock that paces
 	// heartbeats during a run, and the execution of one claimed item.
+	// resultRetryBase is the first backoff of a failed result delivery.
 	heartbeatTicker func(time.Duration) (<-chan time.Time, func())
+	resultRetryBase time.Duration
 	execute         func(ctx context.Context, remote queue.Remote, item queue.Item) workerOutcome
 }
 
@@ -79,6 +82,8 @@ type workerOutcome struct {
 	item   queue.Item
 	result *runner.Result
 	report queue.Result
+	// root is the checkout that ran the item, where its outbox lives.
+	root string
 }
 
 func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, base *runner.Runner, delivery deployer.Config, deliveryEnabled bool, options workerOptions) error {
@@ -104,6 +109,14 @@ func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, ba
 	remote.Running = 0
 	if err := remote.Heartbeat(ctx, "idle"); err != nil {
 		return err
+	}
+	baseRoot := ""
+	if base != nil {
+		baseRoot = base.Layout.Root
+	}
+	// Results a previous process could not deliver go first.
+	if err := flushOutbox(ctx, remote, outboxRoots(baseRoot, options.WorkspaceRoot), options.resultRetryBase); err != nil {
+		return nil // only a shutdown stops a flush
 	}
 	outcomes := make(chan workerOutcome, capacity)
 	var materialize sync.Mutex
@@ -197,8 +210,17 @@ func runRemoteWorker(ctx context.Context, out io.Writer, remote queue.Remote, ba
 			running--
 			active.Store(int32(running))
 			remote.Running = running
-			if err := remote.Done(ctx, outcome.item, outcome.report); err != nil {
-				return err
+			entry := outboxEntry{RunID: outcome.item.ID, TaskID: outcome.item.TaskID, Result: outcome.report}
+			root := outcome.root
+			if root == "" {
+				root = baseRoot
+			}
+			path, err := writeOutbox(root, entry)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "· outbox for %s: %v\n", outcome.item.ID, err)
+			}
+			if err := deliver(ctx, remote, entry, path, options.resultRetryBase); err != nil {
+				return nil // shutting down; the outbox keeps the result
 			}
 			if outcome.result != nil {
 				printResult(out, outcome.result)
@@ -221,6 +243,7 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 		return workerOutcome{item: item, report: queue.Result{Status: "blocked", Error: item.Waiting, ErrorCode: "REMOTE_DEPENDENCY_WAITING"}}
 	}
 	active := *base
+	root := base.Layout.Root
 	active.AI = itemAI(item.AI)
 	active.Progress = progressReporter(ctx, remote, item)
 	applyDriverPreset(&active, item.AI)
@@ -267,6 +290,7 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 						created.Progress = progressReporter(ctx, remote, item)
 						applyDriverPreset(created, item.AI)
 						active = *created
+						root = created.Layout.Root
 					}
 				}
 			}
@@ -283,7 +307,7 @@ func executeWorkerItem(ctx context.Context, remote queue.Remote, base *runner.Ru
 		}
 	}
 	report := resultReport(result, runErr)
-	return workerOutcome{item: item, result: result, report: report}
+	return workerOutcome{item: item, result: result, report: report, root: root}
 }
 
 // progressReporter adapts a runner.Event to a best-effort POST against the

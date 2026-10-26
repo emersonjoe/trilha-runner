@@ -61,6 +61,16 @@ os checks.
   responde `removed`, mantém o branch e também limpa diretório de execução que o git não
   conhece.
 
+**J1.5 Uma task deixada em running por um runner morto roda de novo** — I `TestRunResumesATaskLeftRunningWithNoLiveProcess`
+- Recursos: git, sh.
+- Pré-condições: uma task em `running`, primeiro com `.trilha/runs/TASK-001/runner.pid` nomeando
+  este processo (vivo), depois sem arquivo de pid.
+- Dados: `TASK-001`, driver `echo`.
+- Passos: rodar a task duas vezes.
+- Esperado: com runner vivo a execução é recusada (`not ready`) e nada se move; sem runner a task
+  volta a `ready` com uma evidência `note` dizendo que não havia runner vivo, roda até `review`,
+  e a execução terminada não deixa arquivo de pid (RM-012).
+
 ## J2 — Execução que falha ainda deixa evidência · crítica
 
 *O agente quebra, os checks falham ou o provedor é proibido. Quem mantém vê o porquê.*
@@ -299,6 +309,20 @@ que o cloud não lê.
 - Passos: iniciar o worker; dar três ticks com a run ativa; deixá-la terminar.
 - Esperado: o relógio pede 30 s; ao menos três heartbeats `running 1/1` além do da reivindicação;
   o último heartbeat, depois do resultado, é `idle` (RM-013).
+
+**J5.11 Um resultado nunca se perde a caminho do cloud** — I `TestWorkerResultSurvivesTwoFailedDeliveries`,
+`TestWorkerResendsPendingResultsAtStart`
+- Recursos: git, httptest.
+- Pré-condições: um checkout do worker; uma rota de resultado que responde 500 duas vezes e
+  depois 202; outboxes deixadas por um processo anterior para três runs.
+- Dados: runs `run-000001` a `run-000004`; respostas 202, 409 (já tem) e 404 (recusado).
+- Passos: rodar o worker uma vez com uma run a reportar; iniciar um worker sobre as outboxes que
+  sobraram.
+- Esperado: `.trilha/runs/run-000001/result.json` existe quando chega o primeiro POST; o worker
+  tenta de novo com backoff em vez de sair, o cloud aceita exatamente um resultado e a outbox é
+  limpa; na subida todo resultado pendente é enviado antes da primeira reivindicação, 2xx e 409
+  limpam a outbox, o 404 é posto de lado como `result.rejected.json` em vez de repetido para
+  sempre (RM-012).
 
 ## J6 — Trabalho criado na UI (bundles) · alta
 

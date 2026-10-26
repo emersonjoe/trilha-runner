@@ -58,6 +58,16 @@ checks having run.
 - Expected: list shows `trilha/task-001` (and only directories that are checkouts); clean
   answers `removed`, keeps the branch, and also clears a run directory git does not know.
 
+**J1.5 A task left running by a dead runner runs again** — I `TestRunResumesATaskLeftRunningWithNoLiveProcess`
+- Resources: git, sh.
+- Preconditions: a task in `running`, first with `.trilha/runs/TASK-001/runner.pid` naming this
+  (live) process, then with no pid file.
+- Data: `TASK-001`, driver `echo`.
+- Steps: run the task twice.
+- Expected: with a live runner the run is refused (`not ready`) and nothing moves; with none the
+  task goes back to `ready` with a `note` evidence saying it had no live runner, runs to
+  `review`, and the finished run leaves no pid file (RM-012).
+
 ## J2 — A run that fails still leaves evidence · critical
 
 *The agent crashes, the checks fail, or the provider is forbidden. The maintainer sees why.*
@@ -296,6 +306,18 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
 - Steps: start the worker; tick three times while the run is active; let it finish.
 - Expected: the clock asks for 30 s; at least three `running 1/1` heartbeats beyond the claim's;
   the last heartbeat, after the result, is `idle` (RM-013).
+
+**J5.11 A result is never lost on the way to the cloud** — I `TestWorkerResultSurvivesTwoFailedDeliveries`,
+`TestWorkerResendsPendingResultsAtStart`
+- Resources: git, httptest.
+- Preconditions: a worker checkout; a result route that answers 500 twice, then 202; outboxes
+  left by a previous process for three runs.
+- Data: runs `run-000001` to `run-000004`; answers 202, 409 (already has it) and 404 (refused).
+- Steps: run the worker once with a run to report; start a worker over the leftover outboxes.
+- Expected: `.trilha/runs/run-000001/result.json` exists when the first POST arrives; the worker
+  retries with backoff instead of exiting, the cloud accepts exactly one result and the outbox
+  is cleared; at start every leftover result is sent before the first claim, 2xx and 409 clear
+  the outbox, the 404 is set aside as `result.rejected.json` instead of retried forever (RM-012).
 
 ## J6 — Work created in the UI (bundles) · high
 

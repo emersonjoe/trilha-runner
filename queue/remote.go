@@ -123,7 +123,25 @@ func (r Remote) DependencyStatus(ctx context.Context, project, id string) (strin
 	return result.Status, nil
 }
 
-// Done reports the result of an item.
+// StatusError is a control plane that answered, with a status that is not
+// 2xx. A caller decides from Code whether trying again can help.
+type StatusError struct {
+	Code   int
+	Status string
+	Body   string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("queue: %s: %s", e.Status, e.Body) }
+
+// Retryable answers whether the same request may succeed later: a server
+// error, a timeout or too many requests. Any other 4xx will answer the same.
+func (e *StatusError) Retryable() bool {
+	return e.Code >= 500 || e.Code == http.StatusRequestTimeout || e.Code == http.StatusTooManyRequests
+}
+
+// Done reports the result of an item. A non-2xx answer is a *StatusError.
+// The control plane keeps one result per run and attempt, so sending the
+// same result again (the worker's outbox does, after a crash) is harmless.
 func (r Remote) Done(ctx context.Context, item Item, res Result) error {
 	resp, err := r.do(ctx, http.MethodPost, "/api/runs/"+item.ID+"/result", res)
 	if err != nil {
@@ -132,7 +150,7 @@ func (r Remote) Done(ctx context.Context, item Item, res Result) error {
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("queue: %s: %s", resp.Status, bytes.TrimSpace(b))
+		return &StatusError{Code: resp.StatusCode, Status: resp.Status, Body: string(bytes.TrimSpace(b))}
 	}
 	return nil
 }
