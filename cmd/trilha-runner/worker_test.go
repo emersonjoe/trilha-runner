@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -63,3 +64,65 @@ func TestWorkerCapacityClaimsThirdOnlyAfterOneFinishes(t *testing.T) {
 type nilWriter struct{}
 
 func (nilWriter) Write(value []byte) (int, error) { return len(value), nil }
+
+// roundTrip answers every request of a queue.Remote without a network, so a
+// test decides exactly when the worker's context is cancelled.
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
+
+func answer(status int) *http.Response {
+	return &http.Response{StatusCode: status, Body: http.NoBody, Header: http.Header{}}
+}
+
+// A shutdown (SIGTERM, Ctrl-C) is not a failure, wherever it finds the
+// worker: in the middle of a claim or waiting on an empty queue. A claim
+// that fails while the worker is not stopping is an error. Each moment is
+// forced, not left to the scheduler, so the suite covers every branch on
+// every run.
+func TestWorkerShutdownWhileClaimingOrIdleIsNotAFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		// next answers the claim; cancel stops the worker.
+		next    func(cancel context.CancelFunc) (*http.Response, error)
+		wantErr bool
+	}{
+		{"shutdown during the claim", func(cancel context.CancelFunc) (*http.Response, error) {
+			cancel()
+			return nil, context.Canceled
+		}, false},
+		{"shutdown while idle", func(cancel context.CancelFunc) (*http.Response, error) {
+			// The queue is empty; the worker then waits an hour unless stopped.
+			cancel()
+			return answer(http.StatusNoContent), nil
+		}, false},
+		{"claim fails while running", func(context.CancelFunc) (*http.Response, error) {
+			return nil, errors.New("connection refused")
+		}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			client := &http.Client{Transport: roundTrip(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/api/runs/next" {
+					return c.next(cancel)
+				}
+				return answer(http.StatusOK), nil
+			})}
+			remote := queue.Remote{BaseURL: "http://cloud.example", Worker: "worker", Project: "app", HTTPClient: client}
+			done := make(chan error, 1)
+			go func() {
+				done <- runRemoteWorker(ctx, nilWriter{}, remote, nil, deployer.Config{}, false, workerOptions{Every: time.Hour, WorkspaceRoot: t.TempDir()})
+			}()
+			select {
+			case err := <-done:
+				if (err != nil) != c.wantErr {
+					t.Fatalf("err = %v, want error: %v", err, c.wantErr)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the worker did not return")
+			}
+		})
+	}
+}

@@ -107,6 +107,12 @@ O CI (`.github/workflows/ci.yml`) roda `make test` em Go 1.22 e 1.25, `make repo
 O `testdata/coverage-floor.txt` guarda a cobertura total mínima que o CI aceita. Ele só sobe:
 quando o relatório diz que a cobertura está um ponto ou mais acima do piso, a mudança o sobe.
 Mudança que fica abaixo acrescenta os testes que faltam; o piso não é rebaixado para caber.
+A cobertura não pode depender do tempo: um ramo que um teste só alcança quando uma corrida cai
+para um lado (um desligamento que chega durante um claim, um processo que sai antes do sinal)
+move o total em uma instrução de uma rodada para outra, e com o piso no valor medido o nightly
+reprovou na maioria das noites de novembro de 2026 com todos os testes passando. Force esse
+momento num teste — um transporte falso, uma costura para o sinal — e, quando o total oscilar,
+compare os perfis de cobertura de algumas rodadas para achar o ramo.
 Leia as listas de **pulados** e **mais lentos** do relatório a cada release: pulo que
 ninguém explica e teste que só fica mais lento são trabalho a agendar.
 

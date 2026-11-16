@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"sort"
@@ -116,6 +117,18 @@ func (c coverage) Percent() float64 {
 	return 100 * float64(c.Covered) / float64(c.Statements)
 }
 
+// String shows two decimals and the counts: at one decimal a total one
+// statement under the floor reads as the floor itself.
+func (c coverage) String() string {
+	return fmt.Sprintf("%.2f%% (%d of %d statements)", c.Percent(), c.Covered, c.Statements)
+}
+
+// missing answers how many more covered statements reach the floor.
+func (c coverage) missing(floor float64) int {
+	need := int(math.Ceil(floor*float64(c.Statements)/100 - 1e-9))
+	return max(need-c.Covered, 0)
+}
+
 // coverageByPackage reads a coverage profile. A block listed more than
 // once counts once, covered if any listing covered it.
 func coverageByPackage(r io.Reader) (map[string]coverage, coverage, error) {
@@ -196,7 +209,8 @@ func render(s summary, byPackage map[string]coverage, total coverage, floor floa
 		b.WriteString("\n")
 	}
 	if total.Percent() < floor {
-		fmt.Fprintf(&b, "**Coverage %.1f%% is below the floor %.1f%%** (`testdata/coverage-floor.txt`). Add the tests the change is missing; the floor is not lowered to fit.\n\n", total.Percent(), floor)
+		n := total.missing(floor)
+		fmt.Fprintf(&b, "**Coverage %s is below the floor %.1f%%** (`testdata/coverage-floor.txt`): %d more covered %s reaches it. Add the tests the change is missing; the floor is not lowered to fit.\n\n", total, floor, n, map[bool]string{true: "statement", false: "statements"}[n == 1])
 	} else if total.Percent() >= floor+1 {
 		fmt.Fprintf(&b, "Coverage is %.1f points above the floor: raise `testdata/coverage-floor.txt` to %.1f.\n\n", total.Percent()-floor, float64(int(total.Percent()*10))/10)
 	}
@@ -288,7 +302,7 @@ func run(jsonPath, coverPath, floorPath string, top int, out io.Writer) error {
 	report, ok := render(s, byPackage, total, floor, top)
 	fmt.Fprint(out, report)
 	if !ok {
-		return fmt.Errorf("testreport: %d failed, coverage %.1f%% (floor %.1f%%)", s.Failed, total.Percent(), floor)
+		return fmt.Errorf("testreport: %d failed, coverage %s (floor %.1f%%)", s.Failed, total, floor)
 	}
 	return nil
 }

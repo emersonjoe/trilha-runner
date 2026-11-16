@@ -2,12 +2,15 @@ package worktree
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -226,5 +229,37 @@ func TestCleanStopsProcessesInsideTheWorktreeBeforeRemovingIt(t *testing.T) {
 	}
 	if git(t, m.Layout.Root, "branch", "--list", "trilha/task-001") == "" {
 		t.Fatal("cleaning deleted the branch")
+	}
+}
+
+// A process can exit between the scan and the signal (the `sleep` a shell
+// started a moment ago): its error is logged and the others still get
+// theirs. The exit is forced, not left to timing, so every run covers it.
+func TestTeardownSignalsLogAProcessThatAlreadyExited(t *testing.T) {
+	gone := errors.New("process already finished")
+	var sent []string
+	send := func(pid int, sig syscall.Signal) error {
+		sent = append(sent, fmt.Sprintf("%d/%v", pid, sig))
+		if pid == 202 {
+			return gone
+		}
+		return nil
+	}
+	var log []string
+	record := func(line string) { log = append(log, line) }
+	signalEach([]int{101, 202, 303}, syscall.SIGTERM, "", send, record)
+	signalEach([]int{303}, syscall.SIGKILL, " (still running after 1.5s)", send, record)
+
+	want := []string{
+		"teardown: SIGTERM 101",
+		"teardown: SIGTERM 202: process already finished",
+		"teardown: SIGTERM 303",
+		"teardown: SIGKILL 303 (still running after 1.5s)",
+	}
+	if strings.Join(log, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("log:\n%s\nwant:\n%s", strings.Join(log, "\n"), strings.Join(want, "\n"))
+	}
+	if len(sent) != 4 {
+		t.Fatalf("signals sent = %v", sent)
 	}
 }

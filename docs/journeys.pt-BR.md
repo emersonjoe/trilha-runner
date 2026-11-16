@@ -344,6 +344,17 @@ que o cloud não lê.
   remoções para a reformatação — o tamanho real da mudança; nenhum caminho ou linha vai para o
   resultado (DV-12).
 
+**J5.13 Um desligamento não é falha, onde quer que encontre o worker** — U `TestWorkerShutdownWhileClaimingOrIdleIsNotAFailure`
+- Recursos: um transporte HTTP falso (sem rede).
+- Pré-condições: um worker que consulta a fila a cada hora.
+- Dados: um claim cancelado no meio da requisição; uma fila vazia (204) respondida quando chega
+  o desligamento; um claim que falha com o worker ainda rodando.
+- Passos: rodar o laço do worker; pará-lo exatamente nesse momento.
+- Esperado: os dois primeiros retornam sem erro (SIGTERM do systemd, Ctrl-C), o terceiro
+  retorna o erro. O momento é forçado, não deixado ao escalonador: um ramo coberto só quando
+  uma corrida cai para um lado move a cobertura total em uma instrução e reprovou o nightly no
+  piso (novembro de 2026).
+
 ## J6 — Trabalho criado na UI (bundles) · alta
 
 *O worker baixa um bundle, escreve spec e tasks em `.trilha/` e publica o branch.*
@@ -598,11 +609,14 @@ que cai sem ninguém ver.
 `TestReportFailsBelowTheFloor`, `TestCoverageByPackage`
 - Recursos: nenhum.
 - Pré-condições: um fluxo `go test -json` e um perfil de cobertura.
-- Dados: aprovações, uma falha, um pulo com o motivo, testes lentos; piso acima e abaixo.
+- Dados: aprovações, uma falha, um pulo com o motivo, testes lentos; piso acima e abaixo; um
+  total uma instrução abaixo de um piso de 76,1% (2836 de 3727).
 - Passos: rodar `internal/testreport` (`make report`).
 - Esperado: markdown com passaram/falharam/pulados, os motivos dos pulos, os testes mais
   lentos e a cobertura por pacote; saída ≠ 0 quando um teste falhou ou o total ficou abaixo
-  de `testdata/coverage-floor.txt`; sugestão de subir o piso quando está um ponto ou mais acima.
+  de `testdata/coverage-floor.txt`, dizendo o total com duas casas e a contagem de instruções
+  (`76.09% (2836 of 3727 statements)`) e quantas instruções cobertas faltam para o piso;
+  sugestão de subir o piso quando está um ponto ou mais acima.
 
 ---
 
@@ -945,7 +959,8 @@ E `TestDoctorReportsAndExitsTwelveWhenItSkips`
   ela sai com o branch provado e os metadados de 40 dias também; entradas terminadas e vivas
   ficam; uma entrada viva nunca é podada, por mais velha que seja; duração inválida sai com 1.
 
-**J15.4 Limpar uma worktree para primeiro o que roda dentro dela** — I `TestCleanStopsProcessesInsideTheWorktreeBeforeRemovingIt`
+**J15.4 Limpar uma worktree para primeiro o que roda dentro dela** — I `TestCleanStopsProcessesInsideTheWorktreeBeforeRemovingIt`,
+U `TestTeardownSignalsLogAProcessThatAlreadyExited`
 - Recursos: git, sh, processos filhos reais; `/proc` no Linux, `lsof` no macOS.
 - Pré-condições: a worktree da TASK-001 com um `sleep` dentro, um shell num subdiretório que
   ignora SIGTERM, e um `sleep` fora da worktree.
@@ -953,4 +968,6 @@ E `TestDoctorReportsAndExitsTwelveWhenItSkips`
 - Passos: limpar a worktree (`worktree clean`, a poda do doctor).
 - Esperado: os dois processos de dentro são achados e parados — SIGTERM, depois SIGKILL para o
   que ainda roda após 1,5 s — antes de a worktree ser removida; o processo de fora fica intocado;
-  cada etapa é registrada; o branch fica.
+  cada etapa é registrada; o branch fica. Um processo que sai entre a varredura e o sinal (um
+  `sleep` que o shell acabou de iniciar) tem o erro registrado e os outros ainda recebem o
+  sinal — forçado num teste de unidade, já que no teste real depende do tempo.

@@ -103,7 +103,13 @@ request. `nightly.yml` runs `make flaky` and the report every night.
 
 `testdata/coverage-floor.txt` holds the minimum total coverage CI accepts. It only rises:
 when the report says coverage is a point or more above the floor, the change raises it. A
-change that falls below adds the tests it is missing; the floor is not lowered to fit. Read
+change that falls below adds the tests it is missing; the floor is not lowered to fit.
+Coverage must not depend on timing: a branch a test reaches only when a race goes one way (a
+shutdown that lands during a claim, a process that exits before its signal) moves the total
+by a statement from run to run, and with the floor at the measured value the nightly failed
+on most nights of November 2026 with every test passing. Force that moment in a test — a
+fake transport, a seam for the signal — and when the total wobbles, diff the coverage
+profiles of a few runs to find the branch. Read
 the report's **skipped** and **slowest** lists at each release: a skip nobody can explain
 and a test that keeps getting slower are both work to schedule.
 

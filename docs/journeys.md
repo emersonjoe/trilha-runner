@@ -337,6 +337,17 @@ Worst impact: runs stuck in the cloud, a claim over capacity, or a result the cl
   says 1 file, 3 insertions for the three lines and 1 file, 40 insertions, 40 deletions for the
   reformat — the change's real size; no path or line goes into the result (DV-12).
 
+**J5.13 A shutdown is not a failure, wherever it finds the worker** — U `TestWorkerShutdownWhileClaimingOrIdleIsNotAFailure`
+- Resources: a fake HTTP transport (no network).
+- Preconditions: a worker polling every hour.
+- Data: a claim cancelled mid-request; an empty queue (204) answered as the shutdown arrives;
+  a claim that fails with the worker still running.
+- Steps: run the worker loop; stop it at that exact moment.
+- Expected: the first two return without an error (SIGTERM from systemd, Ctrl-C), the third
+  returns the error. The moment is forced, not left to the scheduler: a branch covered only
+  when a race goes one way moves the total coverage by a statement and failed the nightly at
+  the floor (November 2026).
+
 ## J6 — Work created in the UI (bundles) · high
 
 *The worker downloads a bundle, writes its spec and tasks under `.trilha/` and publishes the branch.*
@@ -587,11 +598,14 @@ coverage that erodes unnoticed.
 `TestReportFailsBelowTheFloor`, `TestCoverageByPackage`
 - Resources: none.
 - Preconditions: a `go test -json` stream and a coverage profile.
-- Data: passes, a failure, a skip with its reason, slow tests; a floor above and below.
+- Data: passes, a failure, a skip with its reason, slow tests; a floor above and below; a
+  total one statement under a 76.1% floor (2836 of 3727).
 - Steps: run `internal/testreport` (`make report`).
 - Expected: markdown with passed/failed/skipped, the reasons for skips, the slowest tests
   and coverage per package; a non-zero exit when a test failed or the total is below
-  `testdata/coverage-floor.txt`; a hint to raise the floor when it is a point or more above.
+  `testdata/coverage-floor.txt`, saying the total at two decimals with its statement counts
+  (`76.09% (2836 of 3727 statements)`) and how many more covered statements reach the floor;
+  a hint to raise the floor when it is a point or more above.
 
 ---
 
@@ -930,7 +944,8 @@ E `TestDoctorReportsAndExitsTwelveWhenItSkips`
   it goes with its proven branch and the 40-day metadata goes too; finished and live entries
   stay; a live entry is never pruned however old; a bad duration exits 1.
 
-**J15.4 Cleaning a worktree stops what runs inside it first** — I `TestCleanStopsProcessesInsideTheWorktreeBeforeRemovingIt`
+**J15.4 Cleaning a worktree stops what runs inside it first** — I `TestCleanStopsProcessesInsideTheWorktreeBeforeRemovingIt`,
+U `TestTeardownSignalsLogAProcessThatAlreadyExited`
 - Resources: git, sh, real child processes; `/proc` on Linux, `lsof` on macOS.
 - Preconditions: TASK-001's worktree with a `sleep` in it, a shell in a subdirectory that
   ignores SIGTERM, and a `sleep` outside the worktree.
@@ -938,4 +953,6 @@ E `TestDoctorReportsAndExitsTwelveWhenItSkips`
 - Steps: clean the worktree (`worktree clean`, the doctor's prune).
 - Expected: both processes inside are found and stopped — SIGTERM, then SIGKILL for the one
   still running after 1.5 s — before the worktree is removed; the process outside is left
-  alone; each step is logged; the branch stays.
+  alone; each step is logged; the branch stays. A process that exits between the scan and its
+  signal (a `sleep` the shell just started) has its error logged and the others are still
+  signalled — forced in a unit test, since in the real one it depends on timing.
