@@ -120,15 +120,7 @@ func Teardown(ctx context.Context, dir string, log func(string)) {
 		log("teardown: no process holds " + dir)
 		return
 	}
-	for _, pid := range pids {
-		if process, err := os.FindProcess(pid); err == nil {
-			if err := process.Signal(syscall.SIGTERM); err != nil {
-				log(fmt.Sprintf("teardown: SIGTERM %d: %v", pid, err))
-			} else {
-				log(fmt.Sprintf("teardown: SIGTERM %d", pid))
-			}
-		}
-	}
+	signalEach(pids, syscall.SIGTERM, "", sendSignal, log)
 	deadline := time.Now().Add(TeardownGrace)
 	for time.Now().Before(deadline) {
 		left := 0
@@ -147,18 +139,35 @@ func Teardown(ctx context.Context, dir string, log func(string)) {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+	var stubborn []int
 	for _, pid := range pids {
-		if !alive(pid) {
-			continue
-		}
-		if process, err := os.FindProcess(pid); err == nil {
-			if err := process.Signal(syscall.SIGKILL); err != nil {
-				log(fmt.Sprintf("teardown: SIGKILL %d: %v", pid, err))
-			} else {
-				log(fmt.Sprintf("teardown: SIGKILL %d (still running after %s)", pid, TeardownGrace))
-			}
+		if alive(pid) {
+			stubborn = append(stubborn, pid)
 		}
 	}
+	signalEach(stubborn, syscall.SIGKILL, fmt.Sprintf(" (still running after %s)", TeardownGrace), sendSignal, log)
+}
+
+// signalEach sends sig to each pid and logs the outcome, with why after a
+// success. A process can exit between the scan and the signal — a `sleep`
+// a shell started — so an error is logged, never fatal.
+func signalEach(pids []int, sig syscall.Signal, why string, send func(int, syscall.Signal) error, log func(string)) {
+	name := map[syscall.Signal]string{syscall.SIGTERM: "SIGTERM", syscall.SIGKILL: "SIGKILL"}[sig]
+	for _, pid := range pids {
+		if err := send(pid, sig); err != nil {
+			log(fmt.Sprintf("teardown: %s %d: %v", name, pid, err))
+			continue
+		}
+		log(fmt.Sprintf("teardown: %s %d%s", name, pid, why))
+	}
+}
+
+func sendSignal(pid int, sig syscall.Signal) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return process.Signal(sig)
 }
 
 // Clean tears a run's worktree down in order — its processes, then the

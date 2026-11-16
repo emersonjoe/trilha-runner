@@ -101,4 +101,17 @@ func TestReportFailsBelowTheFloor(t *testing.T) {
 	if report, ok := render(passing, nil, at(73), floor, 10); !ok || !strings.Contains(report, "raise `testdata/coverage-floor.txt` to 73.0") {
 		t.Fatalf("two points above: ok=%v\n%s", ok, report)
 	}
+	// The nightly of November 2026: one statement short of 76.1% printed as
+	// "coverage 76.1% (floor 76.1%)" and failed. The report says how far off
+	// it is, in statements, at a precision that shows the gap.
+	oneShort := coverage{Statements: 3727, Covered: 2836}
+	report, ok := render(passing, nil, oneShort, 76.1, 10)
+	for _, want := range []string{"76.09% (2836 of 3727 statements)", "1 more covered statement reaches it"} {
+		if ok || !strings.Contains(report, want) {
+			t.Errorf("one statement short: ok=%v, misses %q:\n%s", ok, want, report)
+		}
+	}
+	if report, ok := render(passing, nil, coverage{Statements: 3727, Covered: 2837}, 76.1, 10); !ok {
+		t.Fatalf("2837 of 3727 (76.12%%) under a 76.1%% floor was refused:\n%s", report)
+	}
 }
